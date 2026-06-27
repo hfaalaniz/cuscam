@@ -183,10 +183,17 @@ const HlsPlayer = forwardRef(function HlsPlayer(
           </button>
           <button
             className={"card-action" + (audioOn ? " card-action-on" : "")}
-            title={audioOn ? "Silenciar audio" : "Activar audio (silencia las demás)"}
+            title={
+              !useWebrtc
+                ? "Sin audio en modo HLS — cambia a WebRTC para escuchar"
+                : audioOn
+                ? "Silenciar audio"
+                : "Activar audio (silencia las demás)"
+            }
             onClick={onToggleAudio}
+            disabled={!useWebrtc}
           >
-            {audioOn ? "🔊" : "🔇"}
+            {useWebrtc ? (audioOn ? "🔊" : "🔇") : "🔇"}
           </button>
           {onRecordings && (
             <button className="card-action" title="Ver grabaciones" onClick={onRecordings}>

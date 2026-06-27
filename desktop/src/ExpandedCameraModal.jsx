@@ -153,10 +153,17 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
           </span>
           <button
             className={"card-action" + (audioOn ? " card-action-on" : "")}
-            title={audioOn ? "Silenciar audio" : "Activar audio"}
+            title={
+              !useWebrtc
+                ? "Sin audio en modo HLS — cambia a WebRTC para escuchar"
+                : audioOn
+                ? "Silenciar audio"
+                : "Activar audio"
+            }
             onClick={() => setAudioOn((v) => !v)}
+            disabled={!useWebrtc}
           >
-            {audioOn ? "🔊" : "🔇"}
+            {useWebrtc ? (audioOn ? "🔊" : "🔇") : "🔇"}
           </button>
           <button className="card-action card-delete" title="Cerrar" onClick={onClose}>
             ✕

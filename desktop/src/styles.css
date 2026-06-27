@@ -215,9 +215,14 @@ body {
   line-height: 1;
 }
 
-.card-action:hover {
+.card-action:hover:not(:disabled) {
   color: #ffffff;
   background: rgba(255, 255, 255, 0.08);
+}
+
+.card-action:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .card-action-on {
