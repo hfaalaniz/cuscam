@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import PasswordInput from "./PasswordInput.jsx";
+import FloatingWindow from "./FloatingWindow.jsx";
 
 /**
  * Modal para editar TODAS las propiedades de una cámara que expone el backend:
@@ -74,9 +75,7 @@ export default function EditCameraModal({ camera, onClose, onSaved }) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Editar cámara</h2>
+    <FloatingWindow title="Editar cámara" onClose={onClose} wide>
 
         {loading || !form ? (
           <p className="banner-info">Cargando…</p>
@@ -158,7 +157,6 @@ export default function EditCameraModal({ camera, onClose, onSaved }) {
             </div>
           </form>
         )}
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }

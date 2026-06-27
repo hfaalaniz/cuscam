@@ -11,6 +11,7 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
   const [status, setStatus] = useState("loading");
   const [fellBack, setFellBack] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [audioOn, setAudioOn] = useState(false);
 
   const useWebrtc = mode === "webrtc" && camera.webrtcUrl && !fellBack;
 
@@ -61,9 +62,29 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
       ArrowRight: "right",
     };
     let moving = null;
+    let keepAlive = null;
 
     const typing = (t) =>
       t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+
+    // Movimiento continuo con keep-alive (reenvía el comando mientras se pulsa,
+    // para que la cámara no se autodetenga por el timeout de seguridad ONVIF).
+    function startMoving(dir) {
+      moving = dir;
+      sendPtz({ direction: dir, action: "move", speed: 0.6 });
+      clearInterval(keepAlive);
+      keepAlive = setInterval(
+        () => sendPtz({ direction: dir, action: "move", speed: 0.6 }),
+        400
+      );
+    }
+    function stopMoving() {
+      if (!moving) return;
+      moving = null;
+      clearInterval(keepAlive);
+      keepAlive = null;
+      sendPtz({ action: "stop" });
+    }
 
     function onKeyDown(e) {
       if (e.key === "Escape") {
@@ -76,8 +97,7 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
       if (dir) {
         e.preventDefault();
         if (e.repeat) return;
-        moving = dir;
-        sendPtz({ direction: dir, action: "move", speed: 0.6 });
+        if (moving !== dir) startMoving(dir);
         return;
       }
 
@@ -91,17 +111,11 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
     }
 
     function onKeyUp(e) {
-      if (ARROWS[e.key] && moving) {
-        moving = null;
-        sendPtz({ action: "stop" });
-      }
+      if (ARROWS[e.key] && ARROWS[e.key] === moving) stopMoving();
     }
 
     function onBlur() {
-      if (moving) {
-        moving = null;
-        sendPtz({ action: "stop" });
-      }
+      stopMoving();
     }
 
     window.addEventListener("keydown", onKeyDown);
@@ -111,6 +125,7 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      clearInterval(keepAlive);
     };
   }, [onClose, sendPtz, zoomIn, zoomOut]);
 
@@ -136,6 +151,13 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
             {camera.name}
             <span className="mode-badge">{useWebrtc ? "WebRTC" : "HLS"}</span>
           </span>
+          <button
+            className={"card-action" + (audioOn ? " card-action-on" : "")}
+            title={audioOn ? "Silenciar audio" : "Activar audio"}
+            onClick={() => setAudioOn((v) => !v)}
+          >
+            {audioOn ? "🔊" : "🔇"}
+          </button>
           <button className="card-action card-delete" title="Cerrar" onClick={onClose}>
             ✕
           </button>
@@ -144,9 +166,9 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
         <div className="expanded-video">
           <div className="video-zoom" style={{ transform: `scale(${zoom})` }}>
             {useWebrtc ? (
-              <WebrtcPlayer key="wrtc" url={camera.webrtcUrl} name={camera.name} onStatus={handleStatus} />
+              <WebrtcPlayer key="wrtc" url={camera.webrtcUrl} name={camera.name} onStatus={handleStatus} muted={!audioOn} />
             ) : (
-              <HlsVideo key="hls" url={camera.url} name={camera.name} onStatus={handleStatus} />
+              <HlsVideo key="hls" url={camera.url} name={camera.name} onStatus={handleStatus} muted={!audioOn} />
             )}
           </div>
           {status === "loading" && <div className="overlay spinner" />}

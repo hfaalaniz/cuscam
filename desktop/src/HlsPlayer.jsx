@@ -26,6 +26,8 @@ const HlsPlayer = forwardRef(function HlsPlayer(
     switching = false, // true mientras se cambia la calidad
     active = false, // ventana seleccionada para control por teclado
     recording = false, // true si esta cámara está grabando
+    audioOn = false, // audio de esta cámara activo (exclusivo, controlado por App)
+    onToggleAudio,
     onActivate,
     onToggleQuality,
     onEdit,
@@ -179,6 +181,13 @@ const HlsPlayer = forwardRef(function HlsPlayer(
           >
             🕹️
           </button>
+          <button
+            className={"card-action" + (audioOn ? " card-action-on" : "")}
+            title={audioOn ? "Silenciar audio" : "Activar audio (silencia las demás)"}
+            onClick={onToggleAudio}
+          >
+            {audioOn ? "🔊" : "🔇"}
+          </button>
           {onRecordings && (
             <button className="card-action" title="Ver grabaciones" onClick={onRecordings}>
               ⏺
@@ -228,6 +237,7 @@ const HlsPlayer = forwardRef(function HlsPlayer(
               name={name}
               onStatus={handleStatus}
               onReconnect={handleReconnect}
+              muted={!audioOn}
             />
           ) : (
             <HlsVideo
@@ -236,6 +246,7 @@ const HlsPlayer = forwardRef(function HlsPlayer(
               name={name}
               onStatus={handleStatus}
               onReconnect={handleReconnect}
+              muted={!audioOn}
             />
           )}
         </div>

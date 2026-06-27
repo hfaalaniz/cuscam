@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import Timeline from "./Timeline.jsx";
+import FloatingWindow from "./FloatingWindow.jsx";
 
 /**
- * Modal de grabaciones de una cámara con reproductor tipo DVR:
- * un timeline continuo que abarca todos los segmentos grabados, con cursor de
- * fecha/hora real. Al hacer clic en la barra salta a ese instante, encadenando
- * los segmentos automáticamente (al terminar uno carga el siguiente).
+ * Visor de grabaciones de una cámara: ventana FLOTANTE y arrastrable (no es un
+ * overlay que bloquee el resto de la app). Reproductor tipo DVR con timeline
+ * continuo y cursor de fecha/hora real; al hacer clic en la barra salta a ese
+ * instante, encadenando los segmentos automáticamente.
  *
  * Lee GET /api/cameras/:id/timeline y sirve cada .mp4 con soporte de Range.
  */
@@ -137,11 +138,8 @@ export default function RecordingsModal({ camera, onClose }) {
   const hasData = segments.length > 0 && range.start != null;
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Grabaciones — {camera.name}</h2>
-
-        {loading && <p className="banner-info">Cargando línea de tiempo…</p>}
+    <FloatingWindow title={`Grabaciones — ${camera.name}`} onClose={onClose} wide>
+      {loading && <p className="banner-info">Cargando línea de tiempo…</p>}
         {error && <p className="modal-error">{error}</p>}
 
         {!loading && !error && !hasData && (
@@ -174,6 +172,7 @@ export default function RecordingsModal({ camera, onClose }) {
             </div>
 
             <Timeline
+              cameraId={camera.id}
               segments={segments}
               rangeStart={range.start}
               rangeEnd={range.end}
@@ -220,13 +219,6 @@ export default function RecordingsModal({ camera, onClose }) {
             </div>
           </>
         )}
-
-        <div className="modal-actions">
-          <button type="button" className="btn btn-primary" onClick={onClose}>
-            Cerrar
-          </button>
-        </div>
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import PasswordInput from "./PasswordInput.jsx";
+import FloatingWindow from "./FloatingWindow.jsx";
 
 /**
  * Modal para configurar el Wi-Fi de una cámara (SSID + contraseña).
@@ -47,10 +48,7 @@ export default function WifiModal({ camera, onClose, onSaved }) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Wi-Fi de la cámara — {camera.name}</h2>
-
+    <FloatingWindow title={`Wi-Fi de la cámara — ${camera.name}`} onClose={onClose}>
         <div className="notice">
           ⚠️ Por seguridad, las cámaras V380 no permiten cambiar su Wi-Fi por la red
           de video. Estos datos se guardan como <strong>referencia</strong>. Para
@@ -102,7 +100,6 @@ export default function WifiModal({ camera, onClose, onSaved }) {
             </div>
           </form>
         )}
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }

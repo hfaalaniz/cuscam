@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import FloatingWindow from "./FloatingWindow.jsx";
 
 /**
  * Modal con el historial de pérdidas/recuperaciones de señal de una cámara,
@@ -35,10 +36,7 @@ export default function SignalHistoryModal({ camera, onClose }) {
   const fmt = (ms) => new Date(ms).toLocaleString();
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Historial de señal — {camera.name}</h2>
-
+    <FloatingWindow title={`Historial de señal — ${camera.name}`} onClose={onClose} wide>
         {loading && <p className="banner-info">Cargando historial…</p>}
         {error && <p className="modal-error">{error}</p>}
 
@@ -84,13 +82,6 @@ export default function SignalHistoryModal({ camera, onClose }) {
             )}
           </>
         )}
-
-        <div className="modal-actions">
-          <button type="button" className="btn btn-primary" onClick={onClose}>
-            Cerrar
-          </button>
-        </div>
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }

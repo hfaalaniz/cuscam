@@ -1,12 +1,14 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Barra de línea de tiempo tipo DVR. Pinta los tramos grabados sobre el rango
  * total [rangeStart, rangeEnd] y un cursor en `currentMs` (hora de pared que se
  * está reproduciendo). Clic = onSeek(ms). Arrastrar = selección de rango para
  * exportar, emitida por onSelect({from, to}) (o onSelect(null) al limpiar).
+ * Al pasar el ratón muestra un fotograma de previsualización de ese instante.
  *
  * Props:
+ *  - cameraId: id de la cámara (para pedir los fotogramas de preview)
  *  - segments: [{ start, end }]  (ms epoch)
  *  - rangeStart, rangeEnd: ms epoch (extremos de la barra)
  *  - currentMs: posición actual del cursor (ms epoch) o null
@@ -15,6 +17,7 @@ import { useRef, useState } from "react";
  *  - onSelect({from,to}|null): el usuario marcó/limpió un rango
  */
 export default function Timeline({
+  cameraId,
   segments,
   rangeStart,
   rangeEnd,
@@ -25,6 +28,7 @@ export default function Timeline({
 }) {
   const barRef = useRef(null);
   const [hover, setHover] = useState(null); // { x, ms }
+  const [previewUrl, setPreviewUrl] = useState(null); // URL del frame de hover
   const drag = useRef(null); // { startMs, moved }
 
   const span = Math.max(1, rangeEnd - rangeStart);
@@ -40,6 +44,24 @@ export default function Timeline({
     });
   const fmtShort = (ms) =>
     new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  const inSegment = (ms) => segments.some((s) => ms >= s.start && ms < s.end);
+
+  // Carga el fotograma de previsualización con debounce mientras se mueve el
+  // ratón (evita una petición por cada píxel). Solo dentro de tramos grabados.
+  useEffect(() => {
+    if (!hover || !cameraId || !inSegment(hover.ms)) {
+      setPreviewUrl(null);
+      return;
+    }
+    // Redondea a 2s para alinear con la caché del backend (menos peticiones).
+    const at = Math.floor(hover.ms / 2000) * 2000;
+    const t = setTimeout(() => {
+      setPreviewUrl(`/api/cameras/${cameraId}/frame?at=${at}`);
+    }, 120);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hover && Math.floor(hover.ms / 2000), cameraId]);
 
   function msFromClientX(clientX) {
     const rect = barRef.current.getBoundingClientRect();
@@ -118,16 +140,26 @@ export default function Timeline({
           <div className="tl-cursor" style={{ left: pct(currentMs) + "%" }} />
         )}
 
-        {/* Preview al pasar el ratón */}
+        {/* Línea vertical de hover (dentro de la barra) */}
         {hover && (
-          <>
-            <div className="tl-hover-line" style={{ left: hover.x + "px" }} />
-            <div className="tl-hover-label" style={{ left: hover.x + "px" }}>
-              {fmt(hover.ms)}
-            </div>
-          </>
+          <div className="tl-hover-line" style={{ left: hover.x + "px" }} />
         )}
       </div>
+
+      {/* Overlay de previsualización FUERA de la barra (sin overflow:hidden),
+          para que el fotograma y la etiqueta no queden recortados. */}
+      {hover && (
+        <div className="tl-hover-overlay">
+          {previewUrl && (
+            <div className="tl-hover-thumb" style={{ left: hover.x + "px" }}>
+              <img src={previewUrl} alt="" draggable={false} />
+            </div>
+          )}
+          <div className="tl-hover-label" style={{ left: hover.x + "px" }}>
+            {fmt(hover.ms)}
+          </div>
+        </div>
+      )}
 
       {/* Etiquetas de tiempo */}
       <div className="tl-ticks">

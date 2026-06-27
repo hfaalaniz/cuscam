@@ -468,6 +468,61 @@ body {
   max-width: 560px;
 }
 
+/* ===== Ventana flotante arrastrable (todos los modales) ===== */
+.float-window {
+  position: fixed;
+  width: 460px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  background: #1e1e1e;
+  border: 1px solid #3a3a3a;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.float-window.float-wide {
+  width: 600px;
+}
+.float-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #262626;
+  border-bottom: 1px solid #3a3a3a;
+  cursor: move;
+  user-select: none;
+}
+.float-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ddd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.float-close {
+  background: transparent;
+  border: none;
+  color: #999;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 6px;
+  line-height: 1;
+}
+.float-close:hover {
+  background: #b33;
+  color: #fff;
+}
+.float-body {
+  padding: 16px;
+  overflow-y: auto;
+}
+
 .modal-title {
   margin: 0 0 20px;
   font-size: 18px;
@@ -759,8 +814,20 @@ body {
 
 /* ===== Línea de tiempo tipo DVR ===== */
 .tl {
+  position: relative;
   margin: 10px 0 4px;
   user-select: none;
+}
+/* Overlay de hover anclado a la zona de la barra (la barra empieza en top:0
+   del contenido de .tl). Sin overflow para no recortar el fotograma. */
+.tl-hover-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px; /* alto de la barra */
+  pointer-events: none;
+  z-index: 5;
 }
 .tl-bar {
   position: relative;
@@ -809,9 +876,11 @@ body {
   background: rgba(255, 255, 255, 0.5);
   pointer-events: none;
 }
+/* Etiqueta de hora, justo encima de la barra */
 .tl-hover-label {
   position: absolute;
-  top: -22px;
+  bottom: 100%;
+  margin-bottom: 2px;
   transform: translateX(-50%);
   background: #000;
   color: #eee;
@@ -819,8 +888,27 @@ body {
   padding: 1px 6px;
   border-radius: 4px;
   white-space: nowrap;
-  pointer-events: none;
   border: 1px solid #444;
+  z-index: 2;
+}
+/* Fotograma de previsualización, encima de la etiqueta */
+.tl-hover-thumb {
+  position: absolute;
+  bottom: 100%;
+  margin-bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 3;
+  background: #000;
+  border: 1px solid #555;
+  border-radius: 6px;
+  padding: 2px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+}
+.tl-hover-thumb img {
+  display: block;
+  width: 200px;
+  height: auto;
+  border-radius: 4px;
 }
 /* Marcas de tiempo bajo la barra */
 .tl-ticks {

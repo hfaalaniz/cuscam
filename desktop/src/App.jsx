@@ -26,6 +26,9 @@ export default function App() {
   const [signalFor, setSignalFor] = useState(null); // cámara para historial de señal
   const [showRecSettings, setShowRecSettings] = useState(false); // panel config grabación
   const [activeId, setActiveId] = useState(null); // ventana activa para control por teclado
+  // El audio sigue a la ventana activa (exclusivo). `audioMuted` permite
+  // silenciar manualmente la cámara activa sin perder el foco.
+  const [audioMuted, setAudioMuted] = useState(false);
   const [mode, setMode] = useState(
     () => localStorage.getItem("cuscam-mode") || "hls"
   ); // "webrtc" | "hls"
@@ -66,6 +69,11 @@ export default function App() {
     }
   }, [cameras, activeId]);
 
+  // Al cambiar de ventana activa, el audio se reactiva en la nueva (sigue al foco).
+  useEffect(() => {
+    setAudioMuted(false);
+  }, [activeId]);
+
   // Control por teclado de la ventana activa:
   //  · Flechas  -> PAN/TILT (mover al pulsar, detener al soltar)
   //  · TAB      -> pasa la ventana activa a la siguiente (Shift+TAB: anterior)
@@ -81,6 +89,7 @@ export default function App() {
       ArrowRight: "right",
     };
     let moving = null; // dirección que se está moviendo por teclado
+    let keepAlive = null; // intervalo que reenvía el comando mientras se pulsa
 
     // No interceptar el teclado mientras se escribe en un campo/modal.
     const typing = (t) =>
@@ -88,6 +97,23 @@ export default function App() {
 
     function activePlayer() {
       return activeId != null ? playerRefs.current.get(activeId) : null;
+    }
+
+    // Movimiento continuo: envía el comando y lo REENVÍA cada 400ms (keep-alive)
+    // para que la cámara no se autodetenga por el timeout de seguridad ONVIF.
+    function startMoving(dir) {
+      moving = dir;
+      activePlayer()?.moveStart(dir);
+      clearInterval(keepAlive);
+      keepAlive = setInterval(() => activePlayer()?.moveStart(dir), 400);
+    }
+
+    function stopMoving() {
+      if (!moving) return;
+      moving = null;
+      clearInterval(keepAlive);
+      keepAlive = null;
+      activePlayer()?.moveStop();
     }
 
     function cycle(delta) {
@@ -109,12 +135,8 @@ export default function App() {
       const dir = ARROWS[e.key];
       if (dir) {
         e.preventDefault();
-        if (e.repeat) return; // el navegador repite keydown; ya estamos moviendo
-        const p = activePlayer();
-        if (p) {
-          moving = dir;
-          p.moveStart(dir);
-        }
+        if (e.repeat) return; // el navegador repite keydown; el keep-alive ya mueve
+        if (moving !== dir) startMoving(dir);
         return;
       }
 
@@ -128,18 +150,13 @@ export default function App() {
     }
 
     function onKeyUp(e) {
-      if (ARROWS[e.key] && moving) {
-        moving = null;
-        activePlayer()?.moveStop();
-      }
+      // Detiene solo si se suelta la tecla de la dirección que se está moviendo.
+      if (ARROWS[e.key] && ARROWS[e.key] === moving) stopMoving();
     }
 
     // Si se pierde el foco de la ventana con una flecha pulsada, detenemos.
     function onBlur() {
-      if (moving) {
-        moving = null;
-        activePlayer()?.moveStop();
-      }
+      stopMoving();
     }
 
     window.addEventListener("keydown", onKeyDown);
@@ -149,6 +166,7 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      clearInterval(keepAlive); // limpia el keep-alive al desmontar/recambiar
     };
   }, [cameras, activeId, expandedId]);
 
@@ -269,6 +287,16 @@ export default function App() {
             switching={cam.switching}
             active={cam.id === activeId}
             recording={cam.recording}
+            audioOn={cam.id === activeId && !audioMuted}
+            onToggleAudio={() => {
+              if (cam.id === activeId) {
+                // Es la activa: alterna su silencio.
+                setAudioMuted((m) => !m);
+              } else {
+                // No es la activa: activarla (su audio se enciende solo).
+                setActiveId(cam.id);
+              }
+            }}
             onActivate={() => setActiveId(cam.id)}
             onToggleQuality={() => handleToggleQuality(cam)}
             onEdit={() => setEditFor(cam)}

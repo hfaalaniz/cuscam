@@ -23,7 +23,9 @@ resolución **HD/SD** y más.
 - **Reconexión automática**: si una cámara corta el stream, el reproductor se
   reengancha solo (con un indicador del nº de reconexiones por cámara).
 - **Grabación continua 24/7** con retención configurable, **línea de tiempo tipo
-  DVR** para revisar el histórico, y **exportación de clips MP4** por rango.
+  DVR** (con miniaturas al pasar el ratón) y **exportación de clips MP4** por rango.
+- **Audio en vivo** vinculado a la ventana activa (exclusivo; por WebRTC).
+- **Ventanas flotantes arrastrables** para todos los paneles/modales.
 - **Doble click** en una cámara para verla **ampliada** en un modal.
 - **Gestión de cámaras** desde la web: agregar, editar todas sus propiedades,
   credenciales RTSP, Wi-Fi (referencia), y ver **capacidades ONVIF** reales.
@@ -159,6 +161,7 @@ powershell -ExecutionPolicy Bypass -File .\server\setup-firewall.ps1
 | GET | `/api/cameras/:id/timeline` | Línea de tiempo (segmentos con hora real). |
 | GET | `/api/cameras/:id/recordings/:file` | Sirve un segmento (con Range / `?download=1`). |
 | GET | `/api/cameras/:id/export` | Exporta un clip MP4 de `?from=&to=` (requiere FFmpeg). |
+| GET | `/api/cameras/:id/frame` | Fotograma de previsualización en `?at=` (miniatura del timeline). |
 | GET | `/api/cameras/:id/signal-events` | Historial de pérdidas/recuperaciones de señal (del log MediaMTX). |
 | GET/PUT | `/api/network` | Config de red (host, puertos). |
 | — | `/hls/*`, `/whep/*` | Proxy a MediaMTX (HLS y WebRTC). |

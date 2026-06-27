@@ -1,5 +1,6 @@
 import { useState } from "react";
 import PasswordInput from "./PasswordInput.jsx";
+import FloatingWindow from "./FloatingWindow.jsx";
 
 const EMPTY = {
   name: "",
@@ -51,9 +52,7 @@ export default function AddCameraModal({ onClose, onAdded }) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Agregar cámara</h2>
+    <FloatingWindow title="Agregar cámara" onClose={onClose}>
 
         <form onSubmit={handleSubmit}>
           <label className="field">
@@ -138,7 +137,6 @@ export default function AddCameraModal({ onClose, onAdded }) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }

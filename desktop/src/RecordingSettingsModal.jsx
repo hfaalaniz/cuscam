@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import FloatingWindow from "./FloatingWindow.jsx";
 
 /**
  * Panel de configuración global de grabación. Lee/guarda en
@@ -74,10 +75,7 @@ export default function RecordingSettingsModal({ onClose, onSaved }) {
   const retentionDays = cfg ? Math.round((cfg.retentionHours / 24) * 10) / 10 : 0;
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Configuración de grabación</h2>
-
+    <FloatingWindow title="Configuración de grabación" onClose={onClose}>
         {loading && <p className="banner-info">Cargando…</p>}
         {error && <p className="modal-error">{error}</p>}
 
@@ -157,7 +155,6 @@ export default function RecordingSettingsModal({ onClose, onSaved }) {
             {saving ? "Guardando y reiniciando…" : "Guardar"}
           </button>
         </div>
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }

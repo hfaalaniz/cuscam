@@ -5,10 +5,15 @@ import { useEffect, useRef, useState } from "react";
  * Implementa el handshake WHEP: crea una oferta SDP, la envía por POST al
  * endpoint /whep de MediaMTX y aplica la respuesta.
  */
-export default function WebrtcPlayer({ url, name, onStatus, onReconnect }) {
+export default function WebrtcPlayer({ url, name, onStatus, onReconnect, muted = true }) {
   const videoRef = useRef(null);
   const pcRef = useRef(null);
   const [status, setStatus] = useState("loading"); // loading | playing | error
+
+  // Aplica mute/unmute en tiempo real sobre el elemento <video>.
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.muted = muted;
+  }, [muted]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -95,7 +100,7 @@ export default function WebrtcPlayer({ url, name, onStatus, onReconnect }) {
     <video
       ref={videoRef}
       className="video"
-      muted
+      muted={muted}
       autoPlay
       playsInline
       controls={false}

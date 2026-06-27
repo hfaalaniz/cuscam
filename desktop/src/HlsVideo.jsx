@@ -11,9 +11,14 @@ import Hls from "hls.js";
  * con backoff hasta que el muxer vuelve a estar disponible. Los errores no
  * fatales se intentan recuperar en caliente sin reiniciar.
  */
-export default function HlsVideo({ url, name, onStatus, onReconnect }) {
+export default function HlsVideo({ url, name, onStatus, onReconnect, muted = true }) {
   const videoRef = useRef(null);
   const [status, setStatus] = useState("loading");
+
+  // Aplica mute/unmute en tiempo real sobre el elemento <video>.
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.muted = muted;
+  }, [muted]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -118,7 +123,7 @@ export default function HlsVideo({ url, name, onStatus, onReconnect }) {
     <video
       ref={videoRef}
       className="video"
-      muted
+      muted={muted}
       autoPlay
       playsInline
       controls={false}

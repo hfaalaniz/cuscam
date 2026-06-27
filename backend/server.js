@@ -668,7 +668,10 @@ app.post("/api/cameras/:id/ptz", async (req, res) => {
     const v = ptzVector(direction, speed);
     if (!v) return res.status(400).json({ error: "Dirección PTZ no válida" });
 
-    device.continuousMove({ x: v.x, y: v.y, zoom: v.zoom }, (err) => {
+    // timeout (ms): la cámara mantiene el movimiento sola hasta agotarlo o
+    // recibir un stop. El frontend reenvía el comando (keep-alive) antes de
+    // que expire, por si la cámara ignora el Timeout ONVIF. 2s da margen.
+    device.continuousMove({ x: v.x, y: v.y, zoom: v.zoom, timeout: 2000 }, (err) => {
       if (err) return res.status(502).json({ error: "Error al mover PTZ: " + err.message });
       res.json({ ok: true, action: "move", direction });
     });
@@ -947,6 +950,77 @@ app.get("/api/cameras/:id/signal-events", (req, res) => {
   } catch (err) {
     console.error("Error leyendo eventos de señal:", err);
     res.status(500).json({ error: "No se pudo leer el historial de señal" });
+  }
+});
+
+// Fotograma de previsualización en un instante dado (ms epoch). Extrae 1 frame
+// con FFmpeg y lo cachea en disco (redondeando a THUMB_STEP_MS para reutilizar
+// hovers cercanos). Pensado para el preview del timeline al pasar el ratón.
+const THUMB_STEP_MS = 2000; // resolución de caché: 1 miniatura cada 2s
+app.get("/api/cameras/:id/frame", (req, res) => {
+  try {
+    const config = loadConfig();
+    const cam = config.cameras.find((c) => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: "Cámara no encontrada" });
+
+    const at = Number(req.query.at);
+    if (!Number.isFinite(at)) {
+      return res.status(400).json({ error: "Parámetro 'at' no válido" });
+    }
+
+    const camDir = path.join(recordingsDir(config), cam.id);
+    const seg = segmentsWithTimes(camDir).find((s) => at >= s.start && at < s.end);
+    if (!seg) return res.status(404).json({ error: "Sin grabación en ese instante" });
+
+    // Instante redondeado para la caché (reutiliza hovers cercanos).
+    const bucket = Math.floor(at / THUMB_STEP_MS) * THUMB_STEP_MS;
+    const thumbDir = path.join(recordingsDir(config), ".thumbs", cam.id);
+    const thumbPath = path.join(thumbDir, `${bucket}.jpg`);
+
+    // Cache hit: sirve directamente.
+    if (fs.existsSync(thumbPath)) {
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "max-age=86400");
+      return fs.createReadStream(thumbPath).pipe(res);
+    }
+
+    fs.mkdirSync(thumbDir, { recursive: true });
+    const offsetSec = (bucket - seg.start) / 1000;
+    const input = path.join(camDir, seg.file);
+    const ffmpeg = findFfmpeg();
+    const args = [
+      "-y",
+      "-ss", Math.max(0, offsetSec).toFixed(3),
+      "-i", input,
+      "-frames:v", "1",
+      "-vf", "scale=320:-1",
+      "-q:v", "5",
+      thumbPath,
+    ];
+
+    const proc = spawn(ffmpeg, args, { windowsHide: true });
+    let stderr = "";
+    proc.stderr.on("data", (d) => (stderr += d.toString()));
+    proc.on("error", (err) => {
+      console.error("FFmpeg (frame) no disponible:", err.message);
+      if (!res.headersSent)
+        res.status(500).json({ error: "FFmpeg no está disponible" });
+    });
+    proc.on("close", (code) => {
+      if (code !== 0 || !fs.existsSync(thumbPath)) {
+        console.error("FFmpeg (frame) falló:", stderr.slice(-300));
+        if (!res.headersSent)
+          res.status(500).json({ error: "No se pudo extraer el fotograma" });
+        return;
+      }
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "max-age=86400");
+      fs.createReadStream(thumbPath).pipe(res);
+    });
+  } catch (err) {
+    console.error("Error extrayendo fotograma:", err);
+    if (!res.headersSent)
+      res.status(500).json({ error: "No se pudo extraer el fotograma" });
   }
 });
 

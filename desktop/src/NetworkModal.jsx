@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import FloatingWindow from "./FloatingWindow.jsx";
 
 /**
  * Modal para configurar la red: IP del host Windows (donde corre MediaMTX)
@@ -48,9 +49,7 @@ export default function NetworkModal({ onClose, onSaved }) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Configuración de red</h2>
+    <FloatingWindow title="Configuración de red" onClose={onClose}>
 
         {loading ? (
           <p className="banner-info">Cargando…</p>
@@ -90,7 +89,6 @@ export default function NetworkModal({ onClose, onSaved }) {
             </div>
           </form>
         )}
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }

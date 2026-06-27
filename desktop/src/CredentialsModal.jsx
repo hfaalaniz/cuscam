@@ -1,5 +1,6 @@
 import { useState } from "react";
 import PasswordInput from "./PasswordInput.jsx";
+import FloatingWindow from "./FloatingWindow.jsx";
 
 /**
  * Modal para ingresar/actualizar el usuario y contraseña RTSP de una cámara.
@@ -32,9 +33,7 @@ export default function CredentialsModal({ camera, onClose, onSaved }) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Credenciales RTSP — {camera.name}</h2>
+    <FloatingWindow title={`Credenciales RTSP — ${camera.name}`} onClose={onClose}>
 
         <form onSubmit={handleSubmit}>
           <label className="field">
@@ -66,7 +65,6 @@ export default function CredentialsModal({ camera, onClose, onSaved }) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }

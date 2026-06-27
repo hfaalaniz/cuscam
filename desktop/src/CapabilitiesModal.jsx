@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import FloatingWindow from "./FloatingWindow.jsx";
 
 /**
  * Modal que consulta y muestra las capacidades reales de la cámara por ONVIF:
@@ -29,10 +30,7 @@ export default function CapabilitiesModal({ camera, onClose }) {
   const yn = (v) => (v ? "✅ Sí" : "❌ No");
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Capacidades ONVIF — {camera.name}</h2>
-
+    <FloatingWindow title={`Capacidades ONVIF — ${camera.name}`} onClose={onClose} wide>
         {loading && <p className="banner-info">Consultando la cámara…</p>}
         {error && <p className="modal-error">{error}</p>}
 
@@ -93,12 +91,6 @@ export default function CapabilitiesModal({ camera, onClose }) {
           </>
         )}
 
-        <div className="modal-actions">
-          <button type="button" className="btn btn-primary" onClick={onClose}>
-            Cerrar
-          </button>
-        </div>
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }
