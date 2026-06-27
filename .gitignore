@@ -39,3 +39,9 @@ android/build/
 # React Native nativo generado (la lógica vive en mobile/App.js)
 mobile/android/
 mobile/ios/
+
+# Grabaciones de video (pueden ocupar cientos de GB)
+recordings/
+
+# FFmpeg y otras herramientas binarias (descargadas localmente)
+tools/

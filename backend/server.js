@@ -1,7 +1,9 @@
 import express from "express";
 import cors from "cors";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import onvif from "onvif";
 import { createProxyMiddleware } from "http-proxy-middleware";
@@ -12,6 +14,93 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const CONFIG_PATH = path.join(ROOT, "config", "cameras.json");
 const DESKTOP_DIST = path.join(ROOT, "desktop", "dist");
+const GENERATOR = path.join(ROOT, "server", "generate-mediamtx-config.mjs");
+const GENERATED_YML = path.join(ROOT, "server", "mediamtx.yml");
+const MEDIAMTX_DIR = path.join(ROOT, "mediamtx_v1.19.1_windows_amd64");
+const MEDIAMTX_EXE = path.join(MEDIAMTX_DIR, "mediamtx.exe");
+const MEDIAMTX_YML = path.join(MEDIAMTX_DIR, "mediamtx.yml");
+const TOOLS_DIR = path.join(ROOT, "tools");
+
+/**
+ * Localiza el ejecutable de FFmpeg: primero en tools/ (descargado junto al
+ * proyecto, incluso dentro de subcarpetas del ZIP), luego en el PATH. Devuelve
+ * la ruta o null si no se encuentra.
+ */
+function findFfmpeg() {
+  // Búsqueda recursiva superficial dentro de tools/ por ffmpeg.exe.
+  const stack = [TOOLS_DIR];
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) stack.push(full);
+      else if (/^ffmpeg(\.exe)?$/i.test(e.name)) return full;
+    }
+  }
+  return "ffmpeg"; // confía en el PATH como último recurso
+}
+
+// Valores por defecto de grabación (si falta el bloque en la config).
+const RECORDING_DEFAULTS = {
+  enabled: true,
+  dir: "recordings",
+  retentionHours: 720, // 30 días
+  segmentDuration: "1h",
+  format: "fmp4",
+};
+
+/** Devuelve la config de grabación combinada con los valores por defecto. */
+function recordingConfig(config) {
+  return { ...RECORDING_DEFAULTS, ...(config.recording || {}) };
+}
+
+/** Carpeta absoluta donde MediaMTX guarda las grabaciones. */
+function recordingsDir(config) {
+  return path.resolve(ROOT, recordingConfig(config).dir);
+}
+
+/**
+ * Regenera mediamtx.yml desde la config y reinicia MediaMTX para aplicar los
+ * cambios (MediaMTX no recarga la config de grabación en caliente). Provoca un
+ * corte de ~2s en todas las cámaras. Devuelve { ok, error }.
+ */
+function regenerateAndRestartMediaMtx() {
+  // 1. Regenerar el yml.
+  const gen = spawnSync("node", [GENERATOR], { cwd: ROOT, encoding: "utf-8" });
+  if (gen.status !== 0) {
+    return { ok: false, error: "Fallo al generar mediamtx.yml: " + (gen.stderr || "") };
+  }
+  // 2. Copiarlo junto al binario.
+  try {
+    fs.copyFileSync(GENERATED_YML, MEDIAMTX_YML);
+  } catch (err) {
+    return { ok: false, error: "No se pudo copiar mediamtx.yml: " + err.message };
+  }
+  // 3. Reiniciar MediaMTX (matar el proceso y relanzarlo).
+  try {
+    spawnSync("taskkill", ["/IM", "mediamtx.exe", "/F"], { encoding: "utf-8" });
+  } catch {
+    /* puede no estar corriendo; no es fatal */
+  }
+  try {
+    const child = spawn(MEDIAMTX_EXE, [], {
+      cwd: MEDIAMTX_DIR,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+  } catch (err) {
+    return { ok: false, error: "No se pudo iniciar MediaMTX: " + err.message };
+  }
+  return { ok: true };
+}
 
 const PORT = process.env.PORT || 3000;
 
@@ -66,6 +155,8 @@ function buildCameras(config) {
     deviceId: cam.deviceId,
     model: cam.model,
     quality: cam.quality || "low",
+    // ¿Esta cámara está grabando? Global salvo override por cámara.
+    recording: recordingConfig(config).enabled && cam.record !== false,
   }));
 }
 
@@ -339,7 +430,16 @@ app.put("/api/cameras/:id", (req, res) => {
       };
     }
 
+    // Grabación on/off por cámara. Cambiarlo requiere reiniciar MediaMTX.
+    let recordChanged = false;
+    if (body.record != null) {
+      const next = body.record !== false;
+      if ((cam.record !== false) !== next) recordChanged = true;
+      cam.record = next;
+    }
+
     saveConfig(config);
+    if (recordChanged) regenerateAndRestartMediaMtx();
     res.json({ camera: buildCameras(config).find((c) => c.id === cam.id) });
   } catch (err) {
     console.error("Error editando cámara:", err);
@@ -603,6 +703,364 @@ app.delete("/api/cameras/:id", (req, res) => {
 // Health check simple.
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
+});
+
+// =====================================================================
+//  Grabación (MediaMTX graba en disco; aquí gestionamos config y archivos)
+// =====================================================================
+
+/** Lista recursiva de archivos de vídeo (.mp4) dentro de una carpeta. */
+function listVideoFiles(dir) {
+  const out = [];
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out; // la carpeta puede no existir aún
+  }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      out.push(...listVideoFiles(full));
+    } else if (/\.mp4$/i.test(e.name)) {
+      try {
+        const st = fs.statSync(full);
+        out.push({ full, name: e.name, size: st.size, mtime: st.mtimeMs });
+      } catch {
+        /* ignora archivos que desaparezcan a mitad */
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Parsea la hora de inicio de un segmento a partir de su nombre, que MediaMTX
+ * genera como "YYYY-MM-DD_HH-MM-SS-ffffff.mp4" (ffffff = microsegundos).
+ * Devuelve los milisegundos epoch, o null si el nombre no encaja.
+ */
+function parseSegmentStart(name) {
+  const m = /(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})-(\d{1,6})/.exec(name);
+  if (!m) return null;
+  const [, Y, Mo, D, H, Mi, S, frac] = m;
+  const ms = Math.floor(Number(("0." + frac).slice(0, 9)) * 1000); // micro -> ms
+  // El nombre está en hora LOCAL del servidor (igual que MediaMTX).
+  const d = new Date(Number(Y), Number(Mo) - 1, Number(D), Number(H), Number(Mi), Number(S), ms);
+  return d.getTime();
+}
+
+/**
+ * Devuelve los segmentos de una cámara enriquecidos con tiempos:
+ * start/end/duration (ms). La duración se estima como (inicio del siguiente −
+ * inicio de este); para el último segmento se usa su mtime. Sin dependencias
+ * externas (no requiere ffprobe).
+ */
+function segmentsWithTimes(camDir) {
+  const segs = listVideoFiles(camDir)
+    .map((f) => ({
+      file: path.relative(camDir, f.full).replace(/\\/g, "/"),
+      name: f.name,
+      size: f.size,
+      mtime: f.mtime,
+      start: parseSegmentStart(f.name),
+    }))
+    .filter((s) => s.start != null)
+    .sort((a, b) => a.start - b.start); // cronológico ascendente
+
+  for (let i = 0; i < segs.length; i++) {
+    const next = segs[i + 1];
+    // Fin = inicio del siguiente si son consecutivos; si no, el mtime del archivo.
+    const byNext = next ? next.start : null;
+    const end = byNext != null && byNext > segs[i].start ? byNext : segs[i].mtime;
+    segs[i].end = end;
+    segs[i].duration = Math.max(0, end - segs[i].start);
+  }
+  return segs;
+}
+
+// Configuración global de grabación.
+app.get("/api/recording/config", (req, res) => {
+  try {
+    const config = loadConfig();
+    const rc = recordingConfig(config);
+    // Uso de disco actual de la carpeta de grabaciones.
+    const files = listVideoFiles(recordingsDir(config));
+    const usedBytes = files.reduce((s, f) => s + f.size, 0);
+    res.json({ recording: rc, stats: { files: files.length, usedBytes } });
+  } catch (err) {
+    console.error("Error leyendo config de grabación:", err);
+    res.status(500).json({ error: "No se pudo leer la configuración de grabación" });
+  }
+});
+
+app.put("/api/recording/config", (req, res) => {
+  try {
+    const body = req.body || {};
+    const config = loadConfig();
+    const current = recordingConfig(config);
+
+    const next = { ...current };
+    if (body.enabled != null) next.enabled = !!body.enabled;
+    if (body.dir != null && String(body.dir).trim()) next.dir = String(body.dir).trim();
+    if (body.retentionHours != null) {
+      const h = Math.max(1, Math.floor(Number(body.retentionHours)));
+      if (Number.isFinite(h)) next.retentionHours = h;
+    }
+    if (body.segmentDuration != null && String(body.segmentDuration).trim()) {
+      // Acepta formatos de duración de MediaMTX: "1h", "30m", "15m"…
+      if (/^\d+[smh]$/.test(String(body.segmentDuration).trim())) {
+        next.segmentDuration = String(body.segmentDuration).trim();
+      }
+    }
+    if (body.format === "fmp4" || body.format === "mp4") next.format = body.format;
+
+    config.recording = next;
+    saveConfig(config);
+
+    const result = regenerateAndRestartMediaMtx();
+    if (!result.ok) {
+      return res.status(500).json({ error: result.error, recording: next });
+    }
+    res.json({ recording: next, restarted: true });
+  } catch (err) {
+    console.error("Error guardando config de grabación:", err);
+    res.status(500).json({ error: "No se pudo guardar la configuración de grabación" });
+  }
+});
+
+// Lista de grabaciones de una cámara (más recientes primero).
+app.get("/api/cameras/:id/recordings", (req, res) => {
+  try {
+    const config = loadConfig();
+    const cam = config.cameras.find((c) => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: "Cámara no encontrada" });
+
+    const camDir = path.join(recordingsDir(config), cam.id);
+    // Más recientes primero para la lista; el timeline reordena por su cuenta.
+    const recordings = segmentsWithTimes(camDir).sort((a, b) => b.start - a.start);
+    res.json({ recordings });
+  } catch (err) {
+    console.error("Error listando grabaciones:", err);
+    res.status(500).json({ error: "No se pudieron listar las grabaciones" });
+  }
+});
+
+// Línea de tiempo de una cámara: segmentos cronológicos + rango cubierto.
+// Opcional ?from=ms&to=ms para filtrar a una ventana (p. ej. un día).
+app.get("/api/cameras/:id/timeline", (req, res) => {
+  try {
+    const config = loadConfig();
+    const cam = config.cameras.find((c) => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: "Cámara no encontrada" });
+
+    const camDir = path.join(recordingsDir(config), cam.id);
+    let segs = segmentsWithTimes(camDir); // ascendente
+
+    const from = req.query.from != null ? Number(req.query.from) : null;
+    const to = req.query.to != null ? Number(req.query.to) : null;
+    if (from != null) segs = segs.filter((s) => s.end > from);
+    if (to != null) segs = segs.filter((s) => s.start < to);
+
+    const rangeStart = segs.length ? segs[0].start : null;
+    const rangeEnd = segs.length ? segs[segs.length - 1].end : null;
+
+    res.json({
+      cameraId: cam.id,
+      rangeStart,
+      rangeEnd,
+      segments: segs.map((s) => ({
+        file: s.file,
+        start: s.start,
+        end: s.end,
+        duration: s.duration,
+        size: s.size,
+      })),
+    });
+  } catch (err) {
+    console.error("Error construyendo timeline:", err);
+    res.status(500).json({ error: "No se pudo construir la línea de tiempo" });
+  }
+});
+
+// Exporta un clip MP4 único recortado a [from, to] (ms epoch), concatenando los
+// segmentos necesarios con FFmpeg. Requiere FFmpeg (en tools/ o en el PATH).
+app.get("/api/cameras/:id/export", (req, res) => {
+  const tmpFiles = []; // a limpiar al terminar
+  const cleanup = () => {
+    for (const f of tmpFiles) {
+      try {
+        fs.unlinkSync(f);
+      } catch {
+        /* ignora */
+      }
+    }
+  };
+  try {
+    const config = loadConfig();
+    const cam = config.cameras.find((c) => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: "Cámara no encontrada" });
+
+    const from = Number(req.query.from);
+    const to = Number(req.query.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+      return res.status(400).json({ error: "Rango (from/to) no válido" });
+    }
+    if (to - from > 6 * 3600 * 1000) {
+      return res.status(400).json({ error: "El rango máximo de exportación es 6 horas" });
+    }
+
+    const ffmpeg = findFfmpeg();
+    const camDir = path.join(recordingsDir(config), cam.id);
+    // Segmentos que solapan el rango, en orden cronológico.
+    const segs = segmentsWithTimes(camDir).filter((s) => s.end > from && s.start < to);
+    if (segs.length === 0) {
+      return res.status(404).json({ error: "No hay grabaciones en ese rango" });
+    }
+
+    // Carpeta temporal para los artefactos de FFmpeg.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cuscam-export-"));
+    const out = path.join(tmpDir, "clip.mp4");
+    tmpFiles.push(out);
+
+    let args;
+    if (segs.length === 1) {
+      // Un solo segmento: recorte directo con -ss/-to relativos al inicio.
+      const ss = Math.max(0, (from - segs[0].start) / 1000);
+      const dur = (Math.min(to, segs[0].end) - Math.max(from, segs[0].start)) / 1000;
+      const input = path.join(camDir, segs[0].file);
+      args = [
+        "-y",
+        "-ss", ss.toFixed(3),
+        "-i", input,
+        "-t", dur.toFixed(3),
+        "-c:v", "libx264", "-preset", "veryfast",
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        out,
+      ];
+    } else {
+      // Varios segmentos: lista concat + recorte global al rango.
+      const listFile = path.join(tmpDir, "concat.txt");
+      tmpFiles.push(listFile);
+      const listBody = segs
+        .map((s) => `file '${path.join(camDir, s.file).replace(/\\/g, "/").replace(/'/g, "'\\''")}'`)
+        .join("\n");
+      fs.writeFileSync(listFile, listBody, "utf-8");
+      // Offset del rango respecto al inicio del primer segmento.
+      const ss = Math.max(0, (from - segs[0].start) / 1000);
+      const totalDur = (to - from) / 1000;
+      args = [
+        "-y",
+        "-f", "concat", "-safe", "0", "-i", listFile,
+        "-ss", ss.toFixed(3),
+        "-t", totalDur.toFixed(3),
+        "-c:v", "libx264", "-preset", "veryfast",
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        out,
+      ];
+    }
+
+    const proc = spawn(ffmpeg, args, { windowsHide: true });
+    let stderr = "";
+    proc.stderr.on("data", (d) => (stderr += d.toString()));
+    proc.on("error", (err) => {
+      cleanup();
+      console.error("FFmpeg no disponible:", err.message);
+      if (!res.headersSent) {
+        res.status(500).json({
+          error:
+            "FFmpeg no está disponible. Coloca ffmpeg.exe en la carpeta tools/ o en el PATH.",
+        });
+      }
+    });
+    proc.on("close", (code) => {
+      if (code !== 0 || !fs.existsSync(out)) {
+        cleanup();
+        console.error("FFmpeg falló (code " + code + "):", stderr.slice(-500));
+        if (!res.headersSent) {
+          res.status(500).json({ error: "FFmpeg falló al exportar el clip" });
+        }
+        return;
+      }
+      const fromStr = new Date(from)
+        .toLocaleString("sv")
+        .replace(/[: ]/g, "-"); // YYYY-MM-DD-HH-MM-SS
+      const filename = `${cam.id}_${fromStr}.mp4`;
+      res.setHeader("Content-Type", "video/mp4");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      const stream = fs.createReadStream(out);
+      stream.pipe(res);
+      stream.on("close", () => {
+        cleanup();
+        try {
+          fs.rmdirSync(tmpDir);
+        } catch {
+          /* ignora */
+        }
+      });
+    });
+  } catch (err) {
+    cleanup();
+    console.error("Error exportando clip:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "No se pudo exportar el clip" });
+    }
+  }
+});
+
+// Sirve un archivo de grabación concreto (con soporte de Range para seek).
+app.get("/api/cameras/:id/recordings/:file(*)", (req, res) => {
+  try {
+    const config = loadConfig();
+    const cam = config.cameras.find((c) => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: "Cámara no encontrada" });
+
+    const camDir = path.join(recordingsDir(config), cam.id);
+    // Resuelve y valida que el archivo esté DENTRO de la carpeta de la cámara
+    // (evita path traversal con "../").
+    const target = path.resolve(camDir, req.params.file);
+    if (!target.startsWith(path.resolve(camDir) + path.sep)) {
+      return res.status(400).json({ error: "Ruta no válida" });
+    }
+    if (!fs.existsSync(target)) {
+      return res.status(404).json({ error: "Grabación no encontrada" });
+    }
+
+    const stat = fs.statSync(target);
+    const range = req.headers.range;
+    const download = req.query.download != null;
+    res.setHeader("Content-Type", "video/mp4");
+    if (download) {
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${path.basename(target)}"`
+      );
+    }
+
+    if (range) {
+      // Respuesta parcial para que el <video> pueda hacer seek.
+      const m = /bytes=(\d*)-(\d*)/.exec(range);
+      const start = m && m[1] ? parseInt(m[1], 10) : 0;
+      const end = m && m[2] ? parseInt(m[2], 10) : stat.size - 1;
+      if (start >= stat.size || end >= stat.size) {
+        res.setHeader("Content-Range", `bytes */${stat.size}`);
+        return res.status(416).end();
+      }
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Content-Length", end - start + 1);
+      fs.createReadStream(target, { start, end }).pipe(res);
+    } else {
+      res.setHeader("Content-Length", stat.size);
+      res.setHeader("Accept-Ranges", "bytes");
+      fs.createReadStream(target).pipe(res);
+    }
+  } catch (err) {
+    console.error("Error sirviendo grabación:", err);
+    res.status(500).json({ error: "No se pudo servir la grabación" });
+  }
 });
 
 // Proxy HLS y WebRTC hacia MediaMTX por el mismo origen que la web/API.

@@ -1,39 +1,92 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 import PtzControls from "./PtzControls.jsx";
 import HlsVideo from "./HlsVideo.jsx";
 import WebrtcPlayer from "./WebrtcPlayer.jsx";
+
+// Modo de prueba: ?debugLink=N fuerza el contador de reconexiones a N para ver
+// el badge de calidad de enlace sin esperar a un corte real (0 si no se indica).
+const DEBUG_LINK = (() => {
+  const n = Number(new URLSearchParams(window.location.search).get("debugLink"));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+})();
 
 /**
  * Tarjeta de una cámara: barra de acciones + reproductor + PTZ.
  * Según `mode` reproduce con WebRTC (tiempo casi real) o HLS (~1-2s).
  * Si WebRTC falla, cae automáticamente a HLS.
  */
-export default function HlsPlayer({
-  cameraId,
-  url, // URL HLS
-  webrtcUrl, // URL WebRTC/WHEP
-  name,
-  mode = "hls", // "webrtc" | "hls"
-  quality = "low", // "high" (720p) | "low" (360p)
-  switching = false, // true mientras se cambia la calidad
-  onToggleQuality,
-  onEdit,
-  onCapabilities,
-  onDelete,
-  onCredentials,
-  onWifi,
-  onExpand,
-}) {
+const HlsPlayer = forwardRef(function HlsPlayer(
+  {
+    cameraId,
+    url, // URL HLS
+    webrtcUrl, // URL WebRTC/WHEP
+    name,
+    mode = "hls", // "webrtc" | "hls"
+    quality = "low", // "high" (720p) | "low" (360p)
+    switching = false, // true mientras se cambia la calidad
+    active = false, // ventana seleccionada para control por teclado
+    recording = false, // true si esta cámara está grabando
+    onActivate,
+    onToggleQuality,
+    onEdit,
+    onCapabilities,
+    onRecordings,
+    onDelete,
+    onCredentials,
+    onWifi,
+    onExpand,
+  },
+  ref
+) {
   const [status, setStatus] = useState("loading");
   const [showPtz, setShowPtz] = useState(false);
   const [fellBack, setFellBack] = useState(false); // WebRTC -> HLS
   const [zoom, setZoom] = useState(1); // zoom digital (escala CSS del video)
+  // nº de pérdidas de señal (calidad de enlace). Con ?debugLink=N en la URL se
+  // arranca con N para poder ver el badge sin esperar a un corte real.
+  const [reconnects, setReconnects] = useState(DEBUG_LINK);
+  const [lastDrop, setLastDrop] = useState(DEBUG_LINK > 0 ? new Date() : null); // hora de la última caída
+
+  // Cada pérdida de señal incrementa el contador (indicador de enlace Wi-Fi).
+  const handleReconnect = useCallback(() => {
+    setReconnects((n) => n + 1);
+    setLastDrop(new Date());
+  }, []);
 
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 4;
   const ZOOM_STEP = 0.25;
-  const zoomIn = () => setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2)));
-  const zoomOut = () => setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2)));
+  const zoomIn = useCallback(
+    () => setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2))),
+    []
+  );
+  const zoomOut = useCallback(
+    () => setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2))),
+    []
+  );
+
+  // Envío de comandos PTZ al backend (compartido por botones y teclado).
+  const sendPtz = useCallback(
+    (body) =>
+      fetch(`/api/cameras/${cameraId}/ptz`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).catch((err) => console.warn("PTZ:", err)),
+    [cameraId]
+  );
+
+  // Expone a App.jsx las acciones de la ventana activa (teclado/rueda).
+  useImperativeHandle(
+    ref,
+    () => ({
+      zoomIn,
+      zoomOut,
+      moveStart: (direction) => sendPtz({ direction, action: "move", speed: 0.6 }),
+      moveStop: () => sendPtz({ action: "stop" }),
+    }),
+    [zoomIn, zoomOut, sendPtz]
+  );
 
   const useWebrtc = mode === "webrtc" && webrtcUrl && !fellBack;
 
@@ -51,12 +104,51 @@ export default function HlsPlayer({
     [mode, fellBack, name]
   );
 
+  // Ctrl + rueda del ratón = zoom de esta ventana. Se registra como listener
+  // nativo no pasivo para poder cancelar el zoom de la página con preventDefault.
+  const videoRef = useRef(null);
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    const handler = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      onActivate?.();
+      if (e.deltaY < 0) zoomIn();
+      else zoomOut();
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [onActivate, zoomIn, zoomOut]);
+
   return (
-    <div className="card">
+    <div
+      className={"card" + (active ? " card-active" : "")}
+      onMouseDown={onActivate}
+    >
       <div className="card-header">
         <span className="card-title">
           {name}
           <span className="mode-badge">{useWebrtc ? "WebRTC" : "HLS"}</span>
+          {reconnects > 0 && (
+            <span
+              className={
+                "link-badge" +
+                (reconnects >= 5 ? " link-bad" : reconnects >= 2 ? " link-warn" : "")
+              }
+              title={
+                `${reconnects} reconexión(es) — pérdidas de señal` +
+                (lastDrop ? `. Última: ${lastDrop.toLocaleTimeString()}` : "")
+              }
+            >
+              ↻ {reconnects}
+            </span>
+          )}
+          {recording && (
+            <span className="rec-badge" title="Grabación continua activa">
+              <span className="rec-dot" /> REC
+            </span>
+          )}
         </span>
         <div className="card-actions">
           {onToggleQuality && (
@@ -80,6 +172,11 @@ export default function HlsPlayer({
           >
             🕹️
           </button>
+          {onRecordings && (
+            <button className="card-action" title="Ver grabaciones" onClick={onRecordings}>
+              ⏺
+            </button>
+          )}
           {onEdit && (
             <button className="card-action" title="Editar todas las propiedades" onClick={onEdit}>
               ✏️
@@ -108,6 +205,7 @@ export default function HlsPlayer({
         </div>
       </div>
       <div
+        ref={videoRef}
         className={"video-container" + (onExpand ? " expandable" : "")}
         onDoubleClick={onExpand}
         title={onExpand ? "Doble click para ampliar" : undefined}
@@ -117,9 +215,21 @@ export default function HlsPlayer({
           style={{ transform: `scale(${zoom})` }}
         >
           {useWebrtc ? (
-            <WebrtcPlayer key="wrtc" url={webrtcUrl} name={name} onStatus={handleStatus} />
+            <WebrtcPlayer
+              key="wrtc"
+              url={webrtcUrl}
+              name={name}
+              onStatus={handleStatus}
+              onReconnect={handleReconnect}
+            />
           ) : (
-            <HlsVideo key="hls" url={url} name={name} onStatus={handleStatus} />
+            <HlsVideo
+              key="hls"
+              url={url}
+              name={name}
+              onStatus={handleStatus}
+              onReconnect={handleReconnect}
+            />
           )}
         </div>
         {status === "loading" && !switching && <div className="overlay spinner" />}
@@ -143,4 +253,6 @@ export default function HlsPlayer({
       </div>
     </div>
   );
-}
+});
+
+export default HlsPlayer;

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
  * Implementa el handshake WHEP: crea una oferta SDP, la envía por POST al
  * endpoint /whep de MediaMTX y aplica la respuesta.
  */
-export default function WebrtcPlayer({ url, name, onStatus }) {
+export default function WebrtcPlayer({ url, name, onStatus, onReconnect }) {
   const videoRef = useRef(null);
   const pcRef = useRef(null);
   const [status, setStatus] = useState("loading"); // loading | playing | error
@@ -47,6 +47,7 @@ export default function WebrtcPlayer({ url, name, onStatus }) {
     const connectTimer = setTimeout(() => {
       if (!started && !aborted) {
         console.warn(`WebRTC sin imagen tras 6s en ${name}, forzando fallback`);
+        onReconnect?.("webrtc timeout");
         setStatus("error");
         onStatus?.("error");
       }
@@ -73,6 +74,7 @@ export default function WebrtcPlayer({ url, name, onStatus }) {
       } catch (err) {
         if (aborted) return;
         console.error(`WebRTC falló en ${name}:`, err.message);
+        onReconnect?.(err.message);
         setStatus("error");
         onStatus?.("error");
       }
@@ -87,7 +89,7 @@ export default function WebrtcPlayer({ url, name, onStatus }) {
       pc.close();
       video.srcObject = null;
     };
-  }, [url, name, onStatus]);
+  }, [url, name, onStatus, onReconnect]);
 
   return (
     <video

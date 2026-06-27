@@ -17,8 +17,25 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 4;
   const ZOOM_STEP = 0.25;
-  const zoomIn = () => setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2)));
-  const zoomOut = () => setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2)));
+  const zoomIn = useCallback(
+    () => setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2))),
+    []
+  );
+  const zoomOut = useCallback(
+    () => setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2))),
+    []
+  );
+
+  // Envío de comandos PTZ al backend (compartido por botones y teclado).
+  const sendPtz = useCallback(
+    (body) =>
+      fetch(`/api/cameras/${camera.id}/ptz`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).catch((err) => console.warn("PTZ:", err)),
+    [camera.id]
+  );
 
   const handleStatus = useCallback(
     (s) => {
@@ -32,12 +49,84 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
     [mode, fellBack]
   );
 
-  // Cerrar con la tecla Escape.
+  // Control por teclado de la cámara ampliada:
+  //  · Esc      -> cerrar
+  //  · Flechas  -> PAN/TILT (mover al pulsar, detener al soltar)
+  //  · +/-      -> zoom digital
   useEffect(() => {
-    const onKey = (e) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    const ARROWS = {
+      ArrowUp: "up",
+      ArrowDown: "down",
+      ArrowLeft: "left",
+      ArrowRight: "right",
+    };
+    let moving = null;
+
+    const typing = (t) =>
+      t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+
+    function onKeyDown(e) {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (typing(e.target)) return;
+
+      const dir = ARROWS[e.key];
+      if (dir) {
+        e.preventDefault();
+        if (e.repeat) return;
+        moving = dir;
+        sendPtz({ direction: dir, action: "move", speed: 0.6 });
+        return;
+      }
+
+      if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        zoomIn();
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        zoomOut();
+      }
+    }
+
+    function onKeyUp(e) {
+      if (ARROWS[e.key] && moving) {
+        moving = null;
+        sendPtz({ action: "stop" });
+      }
+    }
+
+    function onBlur() {
+      if (moving) {
+        moving = null;
+        sendPtz({ action: "stop" });
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [onClose, sendPtz, zoomIn, zoomOut]);
+
+  // Ctrl + rueda del ratón = zoom. Mientras el modal está abierto capturamos
+  // el evento en `window` (no pasivo) para impedir SIEMPRE el zoom del
+  // navegador, sin importar sobre qué parte del modal esté el puntero.
+  useEffect(() => {
+    const handler = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      if (e.deltaY < 0) zoomIn();
+      else zoomOut();
+    };
+    window.addEventListener("wheel", handler, { passive: false });
+    return () => window.removeEventListener("wheel", handler);
+  }, [zoomIn, zoomOut]);
 
   return (
     <div className="modal-backdrop expanded-backdrop" onClick={onClose}>

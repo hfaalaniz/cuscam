@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import HlsPlayer from "./HlsPlayer.jsx";
 import AddCameraModal from "./AddCameraModal.jsx";
 import CredentialsModal from "./CredentialsModal.jsx";
@@ -7,6 +7,8 @@ import WifiModal from "./WifiModal.jsx";
 import EditCameraModal from "./EditCameraModal.jsx";
 import CapabilitiesModal from "./CapabilitiesModal.jsx";
 import ExpandedCameraModal from "./ExpandedCameraModal.jsx";
+import RecordingsModal from "./RecordingsModal.jsx";
+import RecordingSettingsModal from "./RecordingSettingsModal.jsx";
 
 export default function App() {
   const [cameras, setCameras] = useState([]);
@@ -19,9 +21,15 @@ export default function App() {
   const [editFor, setEditFor] = useState(null); // cámara seleccionada para editar todo
   const [capsFor, setCapsFor] = useState(null); // cámara seleccionada para ver capacidades
   const [expandedId, setExpandedId] = useState(null); // id de cámara ampliada (doble click)
+  const [recsFor, setRecsFor] = useState(null); // cámara para ver grabaciones
+  const [showRecSettings, setShowRecSettings] = useState(false); // panel config grabación
+  const [activeId, setActiveId] = useState(null); // ventana activa para control por teclado
   const [mode, setMode] = useState(
     () => localStorage.getItem("cuscam-mode") || "hls"
   ); // "webrtc" | "hls"
+
+  // Refs a cada tarjeta para invocar PTZ/zoom de la ventana activa.
+  const playerRefs = useRef(new Map());
 
   function changeMode(next) {
     setMode(next);
@@ -47,6 +55,100 @@ export default function App() {
   }
 
   useEffect(loadCameras, []);
+
+  // Si no hay ventana activa, activa la primera cámara cuando se carguen.
+  useEffect(() => {
+    if (activeId == null && cameras.length > 0) setActiveId(cameras[0].id);
+    if (activeId != null && !cameras.some((c) => c.id === activeId)) {
+      setActiveId(cameras[0]?.id ?? null);
+    }
+  }, [cameras, activeId]);
+
+  // Control por teclado de la ventana activa:
+  //  · Flechas  -> PAN/TILT (mover al pulsar, detener al soltar)
+  //  · TAB      -> pasa la ventana activa a la siguiente (Shift+TAB: anterior)
+  //  · +/-      -> zoom digital
+  useEffect(() => {
+    // Mientras la ventana ampliada está abierta, ella gestiona el teclado.
+    if (expandedId != null) return;
+
+    const ARROWS = {
+      ArrowUp: "up",
+      ArrowDown: "down",
+      ArrowLeft: "left",
+      ArrowRight: "right",
+    };
+    let moving = null; // dirección que se está moviendo por teclado
+
+    // No interceptar el teclado mientras se escribe en un campo/modal.
+    const typing = (t) =>
+      t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+
+    function activePlayer() {
+      return activeId != null ? playerRefs.current.get(activeId) : null;
+    }
+
+    function cycle(delta) {
+      if (cameras.length === 0) return;
+      const idx = cameras.findIndex((c) => c.id === activeId);
+      const next = (idx + delta + cameras.length) % cameras.length;
+      setActiveId(cameras[next].id);
+    }
+
+    function onKeyDown(e) {
+      if (typing(e.target)) return;
+
+      if (e.key === "Tab") {
+        e.preventDefault();
+        cycle(e.shiftKey ? -1 : 1);
+        return;
+      }
+
+      const dir = ARROWS[e.key];
+      if (dir) {
+        e.preventDefault();
+        if (e.repeat) return; // el navegador repite keydown; ya estamos moviendo
+        const p = activePlayer();
+        if (p) {
+          moving = dir;
+          p.moveStart(dir);
+        }
+        return;
+      }
+
+      if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        activePlayer()?.zoomIn();
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        activePlayer()?.zoomOut();
+      }
+    }
+
+    function onKeyUp(e) {
+      if (ARROWS[e.key] && moving) {
+        moving = null;
+        activePlayer()?.moveStop();
+      }
+    }
+
+    // Si se pierde el foco de la ventana con una flecha pulsada, detenemos.
+    function onBlur() {
+      if (moving) {
+        moving = null;
+        activePlayer()?.moveStop();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [cameras, activeId, expandedId]);
 
   async function handleDelete(cam) {
     if (!window.confirm(`¿Eliminar la cámara "${cam.name}"?`)) return;
@@ -126,6 +228,9 @@ export default function App() {
               HLS · estable
             </button>
           </div>
+          <button className="btn btn-ghost" onClick={() => setShowRecSettings(true)}>
+            ⏺ Grabación
+          </button>
           <button className="btn btn-ghost" onClick={() => setShowNetwork(true)}>
             ⚙ Red
           </button>
@@ -149,6 +254,10 @@ export default function App() {
         {cameras.map((cam) => (
           <HlsPlayer
             key={cam.id + "-" + mode + "-" + (cam.quality || "low")}
+            ref={(el) => {
+              if (el) playerRefs.current.set(cam.id, el);
+              else playerRefs.current.delete(cam.id);
+            }}
             cameraId={cam.id}
             url={cam.url}
             webrtcUrl={cam.webrtcUrl}
@@ -156,9 +265,13 @@ export default function App() {
             mode={mode}
             quality={cam.quality || "low"}
             switching={cam.switching}
+            active={cam.id === activeId}
+            recording={cam.recording}
+            onActivate={() => setActiveId(cam.id)}
             onToggleQuality={() => handleToggleQuality(cam)}
             onEdit={() => setEditFor(cam)}
             onCapabilities={() => setCapsFor(cam)}
+            onRecordings={() => setRecsFor(cam)}
             onDelete={() => handleDelete(cam)}
             onCredentials={() => setCredsFor(cam)}
             onWifi={() => setWifiFor(cam)}
@@ -214,6 +327,20 @@ export default function App() {
           camera={cameras.find((c) => c.id === expandedId)}
           mode={mode}
           onClose={() => setExpandedId(null)}
+        />
+      )}
+
+      {recsFor && (
+        <RecordingsModal camera={recsFor} onClose={() => setRecsFor(null)} />
+      )}
+
+      {showRecSettings && (
+        <RecordingSettingsModal
+          onClose={() => setShowRecSettings(false)}
+          onSaved={() => {
+            setShowRecSettings(false);
+            loadCameras(); // refresca el estado "recording" de cada cámara
+          }}
         />
       )}
     </div>

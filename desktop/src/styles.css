@@ -79,6 +79,28 @@ body {
   vertical-align: middle;
 }
 
+/* Indicador de calidad de enlace: nº de reconexiones (pérdidas de señal). */
+.link-badge {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #9ecbff;
+  background: #1f2d3d;
+  padding: 1px 6px;
+  border-radius: 4px;
+  vertical-align: middle;
+  cursor: help;
+}
+.link-badge.link-warn {
+  color: #ffd591;
+  background: #3a2f1a;
+}
+.link-badge.link-bad {
+  color: #ffb3b3;
+  background: #3d1f1f;
+}
+
 /* Botones */
 .btn {
   border: none;
@@ -139,6 +161,14 @@ body {
   background-color: #1e1e1e;
   border-radius: 10px;
   padding: 10px;
+  border: 2px solid transparent;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+/* Ventana activa: recibe el control por teclado (flechas, TAB, Ctrl+rueda). */
+.card-active {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6, 0 0 12px rgba(59, 130, 246, 0.35);
 }
 
 .card-header {
@@ -597,4 +627,221 @@ body {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 8px;
+}
+
+/* ===== Grabación ===== */
+
+/* Badge REC en la cabecera de la tarjeta */
+.rec-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #ff6b6b;
+  background: #3d1f1f;
+  padding: 1px 6px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+.rec-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ff3b30;
+  animation: rec-blink 1.4s ease-in-out infinite;
+}
+@keyframes rec-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.modal-warn {
+  color: #ffd591;
+  font-size: 12px;
+  margin: 10px 0 4px;
+}
+
+.btn-sm {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+/* Modal de grabaciones */
+.rec-list {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.rec-name {
+  font-family: monospace;
+  font-size: 12px;
+  color: #aaa;
+}
+.rec-actions {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+.rec-row-on {
+  background: #1f2d3d;
+}
+.rec-player {
+  margin-bottom: 12px;
+}
+.rec-video {
+  width: 100%;
+  max-height: 50vh;
+  background: #000;
+  border-radius: 8px;
+}
+.rec-player-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* Campos del panel de configuración de grabación */
+.rec-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: #ccc;
+}
+.rec-field input[type="number"],
+.rec-field select {
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  color: #eee;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.rec-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.rec-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
+/* Placeholder cuando aún no se eligió segmento */
+.rec-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  background: #000;
+  border-radius: 8px;
+  color: #888;
+  font-size: 13px;
+}
+
+/* ===== Línea de tiempo tipo DVR ===== */
+.tl {
+  margin: 10px 0 4px;
+  user-select: none;
+}
+.tl-bar {
+  position: relative;
+  height: 40px;
+  background: #15191f;
+  border: 1px solid #333;
+  border-radius: 6px;
+  cursor: pointer;
+  overflow: hidden;
+}
+/* Tramos grabados */
+.tl-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, #2e7d5b, #1f5a41);
+  border-left: 1px solid #0c3a28;
+  min-width: 2px;
+}
+/* Cursor de reproducción */
+.tl-cursor {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: #ff3b30;
+  box-shadow: 0 0 6px rgba(255, 59, 48, 0.8);
+  pointer-events: none;
+}
+.tl-cursor::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 10px;
+  height: 6px;
+  background: #ff3b30;
+  border-radius: 2px;
+}
+/* Línea y etiqueta al pasar el ratón */
+.tl-hover-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+}
+.tl-hover-label {
+  position: absolute;
+  top: -22px;
+  transform: translateX(-50%);
+  background: #000;
+  color: #eee;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  border: 1px solid #444;
+}
+/* Marcas de tiempo bajo la barra */
+.tl-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 10px;
+  color: #888;
+}
+/* Selección de rango para exportar */
+.tl-selection {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(158, 203, 255, 0.25);
+  border-left: 2px solid #9ecbff;
+  border-right: 2px solid #9ecbff;
+  pointer-events: none;
+}
+
+/* Hora actual de reproducción */
+.tl-now {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #9ecbff;
+  text-align: center;
+}
+
+.tl-help {
+  margin-top: 6px !important;
+  text-align: center;
+}
+.rec-sel-label {
+  font-size: 12px;
+  color: #9ecbff;
+  margin-right: auto;
+  align-self: center;
 }

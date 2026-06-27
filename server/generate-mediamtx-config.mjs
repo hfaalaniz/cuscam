@@ -17,6 +17,43 @@ const OUT_PATH = path.join(__dirname, "mediamtx.yml");
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
 const { hlsPort, cameras } = config;
 
+// Config de grabación (con valores por defecto si falta el bloque).
+const rec = {
+  enabled: true,
+  dir: "recordings",
+  retentionHours: 720, // 30 días
+  segmentDuration: "1h",
+  format: "fmp4",
+  ...(config.recording || {}),
+};
+
+// Carpeta de grabaciones en la raíz del proyecto (ruta absoluta para MediaMTX).
+// MediaMTX crea una subcarpeta por cámara usando %path.
+const RECORD_ROOT = path.resolve(ROOT, rec.dir);
+
+/** ¿Esta cámara debe grabar? Global salvo override `record` por cámara. */
+function shouldRecord(cam) {
+  if (!rec.enabled) return false;
+  return cam.record !== false; // por defecto sigue al global
+}
+
+/** Bloque YAML de grabación para un path (vacío si no graba). */
+function recordYaml(cam) {
+  if (!shouldRecord(cam)) return "";
+  // recordPath: una subcarpeta por cámara + timestamp del segmento.
+  // %f en MediaMTX = microsegundos (evita colisiones de nombre).
+  const recordPath = path
+    .join(RECORD_ROOT, "%path", "%Y-%m-%d_%H-%M-%S-%f")
+    .replace(/\\/g, "/"); // YAML/MediaMTX prefiere separadores "/"
+  return (
+    `    record: yes\n` +
+    `    recordPath: ${recordPath}\n` +
+    `    recordFormat: ${rec.format}\n` +
+    `    recordSegmentDuration: ${rec.segmentDuration}\n` +
+    `    recordDeleteAfter: ${rec.retentionHours}h\n`
+  );
+}
+
 // Ruta RTSP efectiva según la calidad elegida (ch00_0 = alta, ch00_1 = baja).
 function effectiveRtsp(cam) {
   const quality = cam.quality || "low";
@@ -34,7 +71,8 @@ const paths = cameras
       `  ${cam.id}:\n` +
       `    source: ${effectiveRtsp(cam)}\n` +
       `    rtspTransport: tcp\n` +
-      `    sourceOnDemand: no\n`
+      `    sourceOnDemand: no\n` +
+      recordYaml(cam)
   )
   .join("\n");
 
