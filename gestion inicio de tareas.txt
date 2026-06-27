@@ -1,0 +1,11 @@
+# Ejecutar manualmente ahora
+Start-ScheduledTask -TaskName "cuscam-autostart"
+
+# Ver estado / último resultado
+Get-ScheduledTaskInfo -TaskName "cuscam-autostart"
+
+# Desactivar temporalmente
+Disable-ScheduledTask -TaskName "cuscam-autostart"
+
+# Eliminarla
+Unregister-ScheduledTask -TaskName "cuscam-autostart" -Confirm:$false

@@ -1,0 +1,41 @@
+# Dependencias y builds
+node_modules/
+dist/
+build/
+
+# Binarios y descargas de MediaMTX (se descargan aparte)
+mediamtx_v1.19.1_windows_amd64/
+server/mediamtx
+server/*.tar.gz
+*.zip
+
+# Ejecutables descargados
+rustup-init.exe
+*.exe
+
+# Configuración con CREDENCIALES reales (no subir; usar el .example)
+config/cameras.json
+
+# mediamtx.yml es GENERADO y contiene credenciales RTSP (no subir)
+server/mediamtx.yml
+
+# Cloudflared / secretos
+.cloudflared/
+*.pem
+
+# Logs / sistema
+*.log
+.DS_Store
+Thumbs.db
+
+# Android generado
+android/.gradle/
+android/.idea/
+android/local.properties
+android/app/build/
+android/build/
+*.iml
+
+# React Native nativo generado (la lógica vive en mobile/App.js)
+mobile/android/
+mobile/ios/

@@ -1,0 +1,18 @@
+{
+  "windowsHostIp": "192.168.1.15",
+  "extraHosts": ["100.x.x.x"],
+  "hlsPort": 8888,
+  "webrtcPort": 8889,
+  "cameras": [
+    {
+      "id": "cam-ejemplo",
+      "name": "Cámara Ejemplo",
+      "rtsp": "rtsp://usuario:contrasena@192.168.1.50:554/live/ch00_1",
+      "deviceId": "000000000",
+      "model": "A2X1EXHR",
+      "onvifPort": 8899,
+      "quality": "low",
+      "wifi": { "ssid": "", "password": "" }
+    }
+  ]
+}

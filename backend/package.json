@@ -1,0 +1,17 @@
+{
+  "name": "cuscam-backend",
+  "version": "1.0.0",
+  "description": "API que sirve la configuración de cámaras y el frontend web de escritorio",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "http-proxy-middleware": "^4.1.1",
+    "onvif": "^0.8.1"
+  }
+}
