@@ -17,7 +17,13 @@ resolución **HD/SD** y más.
 - **Dos modos de transmisión** conmutables: **WebRTC** (tiempo casi real) y
   **HLS** (estable), con *fallback* automático de WebRTC a HLS.
 - **Control PTZ** por ONVIF (mover la cámara: ▲◀▶▼) y **zoom digital** (＋/−).
+- **Control por teclado** sobre la ventana activa: **flechas** = PAN/TILT,
+  **TAB** = cambiar de cámara, **Ctrl + rueda** = zoom (también en la ampliada).
 - **Cambio de calidad HD/SD** en caliente (720p ⇄ 360p) sin cortar las demás.
+- **Reconexión automática**: si una cámara corta el stream, el reproductor se
+  reengancha solo (con un indicador del nº de reconexiones por cámara).
+- **Grabación continua 24/7** con retención configurable, **línea de tiempo tipo
+  DVR** para revisar el histórico, y **exportación de clips MP4** por rango.
 - **Doble click** en una cámara para verla **ampliada** en un modal.
 - **Gestión de cámaras** desde la web: agregar, editar todas sus propiedades,
   credenciales RTSP, Wi-Fi (referencia), y ver **capacidades ONVIF** reales.
@@ -64,6 +70,8 @@ Tailscale sin cambios.
 - [MediaMTX](https://github.com/bluenviron/mediamtx/releases) para Windows
   (descomprimido en `mediamtx_v1.19.1_windows_amd64/`).
 - Cámaras V380 con **RTSP/ONVIF activado** (desde la app oficial V380).
+- *(Opcional)* [FFmpeg](https://www.gyan.dev/ffmpeg/builds/) en `tools/` — solo
+  necesario para **exportar clips MP4**. Ver [`SETUP.md`](SETUP.md#ffmpeg-necesario-solo-para-exportar-clips).
 
 ### 1. Configurar las cámaras
 Copia el ejemplo y edítalo con tus datos reales:
@@ -146,5 +154,10 @@ powershell -ExecutionPolicy Bypass -File .\server\setup-firewall.ps1
 | GET | `/api/cameras/:id/capabilities` | Capacidades ONVIF reales. |
 | POST | `/api/cameras/:id/ptz` | Comando PTZ (mover/detener). |
 | POST | `/api/cameras/:id/quality` | Cambiar HD/SD en caliente. |
+| GET/PUT | `/api/recording/config` | Config de grabación (guardar reinicia MediaMTX). |
+| GET | `/api/cameras/:id/recordings` | Lista de segmentos grabados. |
+| GET | `/api/cameras/:id/timeline` | Línea de tiempo (segmentos con hora real). |
+| GET | `/api/cameras/:id/recordings/:file` | Sirve un segmento (con Range / `?download=1`). |
+| GET | `/api/cameras/:id/export` | Exporta un clip MP4 de `?from=&to=` (requiere FFmpeg). |
 | GET/PUT | `/api/network` | Config de red (host, puertos). |
 | — | `/hls/*`, `/whep/*` | Proxy a MediaMTX (HLS y WebRTC). |

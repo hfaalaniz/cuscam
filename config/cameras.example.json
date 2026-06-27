@@ -3,6 +3,13 @@
   "extraHosts": ["100.x.x.x"],
   "hlsPort": 8888,
   "webrtcPort": 8889,
+  "recording": {
+    "enabled": true,
+    "dir": "recordings",
+    "retentionHours": 720,
+    "segmentDuration": "15m",
+    "format": "fmp4"
+  },
   "cameras": [
     {
       "id": "cam-ejemplo",
