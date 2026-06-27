@@ -31,6 +31,7 @@ const HlsPlayer = forwardRef(function HlsPlayer(
     onEdit,
     onCapabilities,
     onRecordings,
+    onSignalHistory,
     onDelete,
     onCredentials,
     onWifi,
@@ -131,18 +132,24 @@ const HlsPlayer = forwardRef(function HlsPlayer(
           {name}
           <span className="mode-badge">{useWebrtc ? "WebRTC" : "HLS"}</span>
           {reconnects > 0 && (
-            <span
+            <button
+              type="button"
               className={
                 "link-badge" +
                 (reconnects >= 5 ? " link-bad" : reconnects >= 2 ? " link-warn" : "")
               }
               title={
                 `${reconnects} reconexión(es) — pérdidas de señal` +
-                (lastDrop ? `. Última: ${lastDrop.toLocaleTimeString()}` : "")
+                (lastDrop ? `. Última: ${lastDrop.toLocaleTimeString()}` : "") +
+                ". Click para ver el historial."
               }
+              onClick={(e) => {
+                e.stopPropagation();
+                onSignalHistory?.();
+              }}
             >
               ↻ {reconnects}
-            </span>
+            </button>
           )}
           {recording && (
             <span className="rec-badge" title="Grabación continua activa">

@@ -19,6 +19,7 @@ const GENERATED_YML = path.join(ROOT, "server", "mediamtx.yml");
 const MEDIAMTX_DIR = path.join(ROOT, "mediamtx_v1.19.1_windows_amd64");
 const MEDIAMTX_EXE = path.join(MEDIAMTX_DIR, "mediamtx.exe");
 const MEDIAMTX_YML = path.join(MEDIAMTX_DIR, "mediamtx.yml");
+const MEDIAMTX_LOG = path.join(MEDIAMTX_DIR, "mediamtx.log");
 const TOOLS_DIR = path.join(ROOT, "tools");
 
 /**
@@ -879,6 +880,73 @@ app.get("/api/cameras/:id/timeline", (req, res) => {
   } catch (err) {
     console.error("Error construyendo timeline:", err);
     res.status(500).json({ error: "No se pudo construir la línea de tiempo" });
+  }
+});
+
+/**
+ * Convierte una marca de tiempo del log de MediaMTX ("2026/06/27 11:14:11",
+ * hora local) a ms epoch. Devuelve null si no encaja.
+ */
+function parseLogTime(s) {
+  const m = /^(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(s);
+  if (!m) return null;
+  const [, Y, Mo, D, H, Mi, S] = m;
+  return new Date(+Y, +Mo - 1, +D, +H, +Mi, +S).getTime();
+}
+
+/**
+ * Historial de eventos de señal de una cámara, parseado del log de MediaMTX:
+ *  - "loss": el origen RTSP se cortó (ERR ... [RTSP source] <motivo>).
+ *  - "online": el stream volvió (INF ... stream is available and online).
+ * Devuelve los más recientes primero, hasta `limit`.
+ */
+function readSignalEvents(camId, limit = 200) {
+  let text;
+  try {
+    text = fs.readFileSync(MEDIAMTX_LOG, "utf-8");
+  } catch {
+    return [];
+  }
+  const lossRe = new RegExp(
+    `^(.+?) ERR \\[path ${camId}\\] \\[RTSP source\\] (.+)$`
+  );
+  const onlineRe = new RegExp(
+    `^(.+?) INF \\[path ${camId}\\] stream is available and online`
+  );
+  const events = [];
+  // Recorremos de abajo (más reciente) hacia arriba y cortamos al llegar a limit.
+  const lines = text.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0 && events.length < limit; i--) {
+    const line = lines[i];
+    let m = lossRe.exec(line);
+    if (m) {
+      const at = parseLogTime(m[1]);
+      if (at != null) events.push({ at, type: "loss", reason: m[2].trim() });
+      continue;
+    }
+    m = onlineRe.exec(line);
+    if (m) {
+      const at = parseLogTime(m[1]);
+      if (at != null) events.push({ at, type: "online", reason: "Señal recuperada" });
+    }
+  }
+  return events; // ya en orden descendente por construcción
+}
+
+// Historial de pérdidas/recuperaciones de señal de una cámara (del log MediaMTX).
+app.get("/api/cameras/:id/signal-events", (req, res) => {
+  try {
+    const config = loadConfig();
+    const cam = config.cameras.find((c) => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: "Cámara no encontrada" });
+
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    const events = readSignalEvents(cam.id, limit);
+    const losses = events.filter((e) => e.type === "loss").length;
+    res.json({ cameraId: cam.id, totalLosses: losses, events });
+  } catch (err) {
+    console.error("Error leyendo eventos de señal:", err);
+    res.status(500).json({ error: "No se pudo leer el historial de señal" });
   }
 });
 

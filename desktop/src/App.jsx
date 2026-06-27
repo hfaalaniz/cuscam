@@ -9,6 +9,7 @@ import CapabilitiesModal from "./CapabilitiesModal.jsx";
 import ExpandedCameraModal from "./ExpandedCameraModal.jsx";
 import RecordingsModal from "./RecordingsModal.jsx";
 import RecordingSettingsModal from "./RecordingSettingsModal.jsx";
+import SignalHistoryModal from "./SignalHistoryModal.jsx";
 
 export default function App() {
   const [cameras, setCameras] = useState([]);
@@ -22,6 +23,7 @@ export default function App() {
   const [capsFor, setCapsFor] = useState(null); // cámara seleccionada para ver capacidades
   const [expandedId, setExpandedId] = useState(null); // id de cámara ampliada (doble click)
   const [recsFor, setRecsFor] = useState(null); // cámara para ver grabaciones
+  const [signalFor, setSignalFor] = useState(null); // cámara para historial de señal
   const [showRecSettings, setShowRecSettings] = useState(false); // panel config grabación
   const [activeId, setActiveId] = useState(null); // ventana activa para control por teclado
   const [mode, setMode] = useState(
@@ -272,6 +274,7 @@ export default function App() {
             onEdit={() => setEditFor(cam)}
             onCapabilities={() => setCapsFor(cam)}
             onRecordings={() => setRecsFor(cam)}
+            onSignalHistory={() => setSignalFor(cam)}
             onDelete={() => handleDelete(cam)}
             onCredentials={() => setCredsFor(cam)}
             onWifi={() => setWifiFor(cam)}
@@ -332,6 +335,13 @@ export default function App() {
 
       {recsFor && (
         <RecordingsModal camera={recsFor} onClose={() => setRecsFor(null)} />
+      )}
+
+      {signalFor && (
+        <SignalHistoryModal
+          camera={signalFor}
+          onClose={() => setSignalFor(null)}
+        />
       )}
 
       {showRecSettings && (

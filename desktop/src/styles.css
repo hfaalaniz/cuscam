@@ -85,12 +85,17 @@ body {
   margin-left: 6px;
   font-size: 10px;
   font-weight: 700;
+  font-family: inherit;
   color: #9ecbff;
   background: #1f2d3d;
+  border: none;
   padding: 1px 6px;
   border-radius: 4px;
   vertical-align: middle;
-  cursor: help;
+  cursor: pointer;
+}
+.link-badge:hover {
+  filter: brightness(1.25);
 }
 .link-badge.link-warn {
   color: #ffd591;
@@ -99,6 +104,16 @@ body {
 .link-badge.link-bad {
   color: #ffb3b3;
   background: #3d1f1f;
+}
+
+/* Eventos de señal en el modal de historial */
+.sig-loss {
+  color: #ffb3b3;
+  font-weight: 600;
+}
+.sig-online {
+  color: #8ce0a8;
+  font-weight: 600;
 }
 
 /* Botones */

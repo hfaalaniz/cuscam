@@ -159,5 +159,6 @@ powershell -ExecutionPolicy Bypass -File .\server\setup-firewall.ps1
 | GET | `/api/cameras/:id/timeline` | Línea de tiempo (segmentos con hora real). |
 | GET | `/api/cameras/:id/recordings/:file` | Sirve un segmento (con Range / `?download=1`). |
 | GET | `/api/cameras/:id/export` | Exporta un clip MP4 de `?from=&to=` (requiere FFmpeg). |
+| GET | `/api/cameras/:id/signal-events` | Historial de pérdidas/recuperaciones de señal (del log MediaMTX). |
 | GET/PUT | `/api/network` | Config de red (host, puertos). |
 | — | `/hls/*`, `/whep/*` | Proxy a MediaMTX (HLS y WebRTC). |
