@@ -1,0 +1,21 @@
+[Unit]
+# MediaMTX para cuscam (Linux / Raspberry Pi).
+# Antes de arrancar, regenera mediamtx.yml desde config/cameras.json y lo copia
+# junto al binario. Ajusta WorkingDirectory/User/rutas a tu instalación.
+Description=cuscam MediaMTX
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fabian
+WorkingDirectory=/home/fabian/cuscam/mediamtx
+# Regenera la config justo antes de arrancar (idempotente).
+ExecStartPre=/usr/bin/node /home/fabian/cuscam/server/generate-mediamtx-config.mjs
+ExecStartPre=/bin/cp /home/fabian/cuscam/server/mediamtx.yml /home/fabian/cuscam/mediamtx/mediamtx.yml
+ExecStart=/home/fabian/cuscam/mediamtx/mediamtx
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

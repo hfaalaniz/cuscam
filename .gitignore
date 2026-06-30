@@ -3,11 +3,13 @@ node_modules/
 dist/
 build/
 
-# Binarios y descargas de MediaMTX (se descargan aparte)
-mediamtx_v1.19.1_windows_amd64/
+# Binarios y descargas de MediaMTX (se descargan aparte, por plataforma)
+mediamtx_*/
+mediamtx/
 server/mediamtx
 server/*.tar.gz
 *.zip
+*.tar.gz
 
 # Ejecutables descargados
 rustup-init.exe

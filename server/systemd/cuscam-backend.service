@@ -1,0 +1,21 @@
+[Unit]
+# Backend Node de cuscam (Linux / Raspberry Pi). Sirve la web, la API y el
+# proxy de vídeo en el puerto 3100. Ajusta User/rutas a tu instalación.
+Description=cuscam backend (Node)
+After=network-online.target cuscam-mediamtx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fabian
+WorkingDirectory=/home/fabian/cuscam/backend
+Environment=PORT=3100
+# Permite a regenerateAndRestartMediaMtx() reiniciar MediaMTX por systemd
+# en vez de matar/relanzar el proceso a mano.
+Environment=MEDIAMTX_SYSTEMD=cuscam-mediamtx
+ExecStart=/usr/bin/node /home/fabian/cuscam/backend/server.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

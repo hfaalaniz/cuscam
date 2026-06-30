@@ -168,8 +168,33 @@ body {
 /* Cuadrícula responsiva: 2 columnas en escritorio, se adapta hacia abajo. */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: 16px;
+}
+
+/* Columnas según cuántas ventanas haya visibles: con menos de 3, las que
+   quedan se expanden para llenar el ancho (no se quedan estrechas). */
+.grid-1 {
+  grid-template-columns: 1fr;
+}
+.grid-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+.grid-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* En pantallas estrechas (y app Android) reducimos columnas. */
+@media (max-width: 1100px) {
+  .grid-2,
+  .grid-3 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 700px) {
+  .grid-2,
+  .grid-3 {
+    grid-template-columns: 1fr;
+  }
 }
 
 .card {
@@ -323,6 +348,84 @@ body {
   background: rgba(255, 138, 128, 0.12);
 }
 
+.card-close:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* Dropdown de ventanas de cámara (mostrar/ocultar) */
+.cam-menu {
+  position: relative;
+  display: inline-block;
+}
+.cam-menu-badge {
+  margin-left: 6px;
+  font-size: 11px;
+  background: rgba(59, 130, 246, 0.25);
+  color: #9bbcdd;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+.cam-menu .caret {
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.7;
+}
+.cam-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.cam-menu-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 41;
+  min-width: 240px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: #232326;
+  border: 1px solid #3a3a3a;
+  border-radius: 10px;
+  padding: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.cam-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 6px 8px;
+  border-bottom: 1px solid #333;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #aaa;
+}
+.cam-menu-empty {
+  font-size: 13px;
+  color: #888;
+  padding: 6px;
+}
+.cam-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #e6e6e6;
+}
+.cam-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.cam-menu-item input {
+  cursor: pointer;
+}
+.cam-menu-off {
+  color: #888;
+}
+
 /* Relación de aspecto fija 16:9. */
 .video-container {
   position: relative;
@@ -409,9 +512,17 @@ body {
 }
 
 .overlay.error {
+  flex-direction: column;
+  gap: 6px;
   color: #ff8a80;
   font-size: 14px;
   font-weight: 600;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.overlay-icon {
+  font-size: 30px;
+  line-height: 1;
 }
 
 .overlay.switching {
@@ -706,6 +817,27 @@ body {
 
 /* ===== Grabación ===== */
 
+/* Selector de día en el visor de grabaciones */
+.rec-day-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.rec-day-label {
+  font-size: 13px;
+  color: #bbb;
+}
+.rec-day-select {
+  background: #232326;
+  color: #eee;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
 /* Badge REC en la cabecera de la tarjeta */
 .rec-badge {
   display: inline-flex;
@@ -741,6 +873,108 @@ body {
 .btn-sm {
   padding: 2px 8px;
   font-size: 12px;
+}
+
+/* Detector de cámaras USB */
+.usb-scan {
+  margin-bottom: 14px;
+}
+.usb-scan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #bbb;
+}
+.usb-device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.usb-device {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #333;
+  border-radius: 8px;
+  background: #1c1c1e;
+  color: #eee;
+  cursor: pointer;
+  text-align: left;
+}
+.usb-device:hover:not(:disabled) {
+  border-color: #4a9eff;
+}
+.usb-device-on {
+  border-color: #4a9eff;
+  background: #20303f;
+}
+.usb-device-used {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.usb-device-name {
+  font-weight: 600;
+}
+.usb-device-meta {
+  font-size: 12px;
+  color: #999;
+  white-space: nowrap;
+}
+
+/* Modal de descubrimiento (pestañas IP / USB) */
+.discover-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #333;
+}
+.discover-tabs .tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #aaa;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.discover-tabs .tab-on {
+  color: #fff;
+  border-bottom-color: #4a9eff;
+}
+.discover-subnet {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.discover-subnet .field {
+  flex: 1;
+}
+.discover-probe {
+  margin-top: 12px;
+  border-top: 1px solid #2a2a2a;
+  padding-top: 10px;
+}
+.discover-ok {
+  color: #8ce99a;
+  font-size: 13px;
+}
+.discover-rtsp {
+  font-family: monospace;
+  font-size: 12px;
+  color: #9bbcdd;
+  word-break: break-all;
 }
 
 /* Modal de grabaciones */

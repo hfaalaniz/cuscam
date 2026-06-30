@@ -20,6 +20,17 @@
       "onvifPort": 8899,
       "quality": "low",
       "wifi": { "ssid": "", "password": "" }
+    },
+    {
+      "_comment": "Webcam USB (DirectShow). No usa rtsp/onvif: FFmpeg la captura y publica. 'device' = nombre exacto de 'ffmpeg -list_devices true -f dshow -i dummy'. 'size'/'fps' deben coincidir con lo que la cámara entrega de verdad ('-list_options').",
+      "id": "cam-usb-ejemplo",
+      "name": "Webcam USB",
+      "source": "usb",
+      "device": "iSlim 321R",
+      "model": "iSlim 321R",
+      "size": "640x480",
+      "fps": 6,
+      "quality": "low"
     }
   ]
 }

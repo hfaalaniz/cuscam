@@ -179,7 +179,27 @@ export default function ExpandedCameraModal({ camera, mode = "hls", onClose }) {
             )}
           </div>
           {status === "loading" && <div className="overlay spinner" />}
-          {status === "error" && <div className="overlay error">Sin señal</div>}
+          {status === "reconnecting" && (
+            <div className="overlay switching">
+              <div className="spinner-inline" />
+              Conectando…
+            </div>
+          )}
+          {status === "error" && (
+            <div className="overlay error">
+              {camera.source === "usb" ? (
+                <>
+                  <span className="overlay-icon">🔌</span>
+                  Cámara desconectada
+                </>
+              ) : (
+                <>
+                  <span className="overlay-icon">📡</span>
+                  Sin señal
+                </>
+              )}
+            </div>
+          )}
           {zoom > 1 && <div className="zoom-badge">{zoom.toFixed(2)}×</div>}
 
           <div className="ptz-overlay">

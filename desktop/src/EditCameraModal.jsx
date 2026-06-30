@@ -18,6 +18,17 @@ export default function EditCameraModal({ camera, onClose, onSaved }) {
       .then((res) => res.json())
       .then((data) => {
         const c = data.camera;
+        if (c.source === "usb") {
+          setForm({
+            source: "usb",
+            name: c.name || "",
+            model: c.model || "",
+            device: c.device || "",
+            size: c.size || "640x480",
+            fps: c.fps || 15,
+          });
+          return;
+        }
         setForm({
           name: c.name || "",
           deviceId: c.deviceId || "",
@@ -48,21 +59,31 @@ export default function EditCameraModal({ camera, onClose, onSaved }) {
     }
     setSubmitting(true);
     try {
+      const payload =
+        form.source === "usb"
+          ? {
+              name: form.name,
+              model: form.model,
+              device: form.device,
+              size: form.size,
+              fps: Number(form.fps),
+            }
+          : {
+              name: form.name,
+              deviceId: form.deviceId,
+              model: form.model,
+              ip: form.ip,
+              port: form.port,
+              path: form.path,
+              user: form.user,
+              password: form.password,
+              onvifPort: form.onvifPort,
+              wifi: { ssid: form.wifiSsid, password: form.wifiPassword },
+            };
       const res = await fetch(`/api/cameras/${camera.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: form.name,
-          deviceId: form.deviceId,
-          model: form.model,
-          ip: form.ip,
-          port: form.port,
-          path: form.path,
-          user: form.user,
-          password: form.password,
-          onvifPort: form.onvifPort,
-          wifi: { ssid: form.wifiSsid, password: form.wifiPassword },
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al guardar");
@@ -87,16 +108,52 @@ export default function EditCameraModal({ camera, onClose, onSaved }) {
               <input value={form.name} onChange={update("name")} autoFocus />
             </label>
             <div className="field-row">
-              <label className="field">
-                <span>ID Dispositivo</span>
-                <input value={form.deviceId} onChange={update("deviceId")} />
-              </label>
+              {form.source !== "usb" && (
+                <label className="field">
+                  <span>ID Dispositivo</span>
+                  <input value={form.deviceId} onChange={update("deviceId")} />
+                </label>
+              )}
               <label className="field">
                 <span>Modelo</span>
                 <input value={form.model} onChange={update("model")} />
               </label>
             </div>
 
+            {form.source === "usb" ? (
+              <>
+                <h3 className="section-title">Cámara USB</h3>
+                <label className="field">
+                  <span>Dispositivo</span>
+                  <input value={form.device} disabled />
+                </label>
+                <div className="field-row">
+                  <label className="field">
+                    <span>Resolución</span>
+                    <input
+                      value={form.size}
+                      onChange={update("size")}
+                      placeholder="640x480"
+                    />
+                  </label>
+                  <label className="field field-sm">
+                    <span>FPS</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="60"
+                      value={form.fps}
+                      onChange={update("fps")}
+                    />
+                  </label>
+                </div>
+                <p className="modal-hint">
+                  Cambiar resolución o fps reinicia la captura de esta cámara
+                  (un breve corte solo en ella).
+                </p>
+              </>
+            ) : (
+              <>
             <h3 className="section-title">Conexión RTSP</h3>
             <div className="field-row">
               <label className="field">
@@ -144,6 +201,8 @@ export default function EditCameraModal({ camera, onClose, onSaved }) {
                 <PasswordInput value={form.wifiPassword} onChange={update("wifiPassword")} />
               </label>
             </div>
+              </>
+            )}
 
             {error && <p className="modal-error">{error}</p>}
 

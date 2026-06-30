@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import HlsPlayer from "./HlsPlayer.jsx";
 import AddCameraModal from "./AddCameraModal.jsx";
+import DiscoverModal from "./DiscoverModal.jsx";
 import CredentialsModal from "./CredentialsModal.jsx";
 import NetworkModal from "./NetworkModal.jsx";
 import WifiModal from "./WifiModal.jsx";
@@ -16,6 +17,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [showDiscover, setShowDiscover] = useState(false); // descubrimiento IP+USB
   const [showNetwork, setShowNetwork] = useState(false);
   const [credsFor, setCredsFor] = useState(null); // cámara seleccionada para credenciales
   const [wifiFor, setWifiFor] = useState(null); // cámara seleccionada para Wi-Fi
@@ -32,6 +34,48 @@ export default function App() {
   const [mode, setMode] = useState(
     () => localStorage.getItem("cuscam-mode") || "hls"
   ); // "webrtc" | "hls"
+  // Ventanas de cámara cerradas (ocultas, no eliminadas). Persistente entre
+  // recargas. El grid (auto-fit) reacomoda solo el resto al ocultar/mostrar.
+  const [hiddenIds, setHiddenIds] = useState(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem("cuscam-hidden") || "[]"));
+    } catch {
+      return new Set();
+    }
+  });
+  const [showCamMenu, setShowCamMenu] = useState(false); // dropdown de ventanas
+
+  function persistHidden(next) {
+    localStorage.setItem("cuscam-hidden", JSON.stringify([...next]));
+  }
+  function hideCamera(id) {
+    setHiddenIds((prev) => {
+      const next = new Set(prev).add(id);
+      persistHidden(next);
+      return next;
+    });
+    // Si ocultamos la ventana activa, el foco de teclado pasa a otra visible.
+    setActiveId((cur) => (cur === id ? null : cur));
+    // Y si estaba ampliada, cerramos el modal.
+    setExpandedId((cur) => (cur === id ? null : cur));
+  }
+  function showCamera(id) {
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      persistHidden(next);
+      return next;
+    });
+  }
+  function toggleCamera(id) {
+    hiddenIds.has(id) ? showCamera(id) : hideCamera(id);
+  }
+  function showAllCameras() {
+    setHiddenIds(() => {
+      persistHidden(new Set());
+      return new Set();
+    });
+  }
 
   // Refs a cada tarjeta para invocar PTZ/zoom de la ventana activa.
   const playerRefs = useRef(new Map());
@@ -61,13 +105,13 @@ export default function App() {
 
   useEffect(loadCameras, []);
 
-  // Si no hay ventana activa, activa la primera cámara cuando se carguen.
+  // Mantiene una ventana activa válida y VISIBLE: si no hay, o la activa fue
+  // ocultada/eliminada, pasa el foco a la primera cámara visible.
   useEffect(() => {
-    if (activeId == null && cameras.length > 0) setActiveId(cameras[0].id);
-    if (activeId != null && !cameras.some((c) => c.id === activeId)) {
-      setActiveId(cameras[0]?.id ?? null);
-    }
-  }, [cameras, activeId]);
+    const visible = cameras.filter((c) => !hiddenIds.has(c.id));
+    const activeOk = activeId != null && visible.some((c) => c.id === activeId);
+    if (!activeOk) setActiveId(visible[0]?.id ?? null);
+  }, [cameras, activeId, hiddenIds]);
 
   // Al cambiar de ventana activa, el audio se reactiva en la nueva (sigue al foco).
   useEffect(() => {
@@ -117,10 +161,12 @@ export default function App() {
     }
 
     function cycle(delta) {
-      if (cameras.length === 0) return;
-      const idx = cameras.findIndex((c) => c.id === activeId);
-      const next = (idx + delta + cameras.length) % cameras.length;
-      setActiveId(cameras[next].id);
+      // TAB cicla solo entre ventanas VISIBLES (las cerradas se saltan).
+      const visible = cameras.filter((c) => !hiddenIds.has(c.id));
+      if (visible.length === 0) return;
+      const idx = visible.findIndex((c) => c.id === activeId);
+      const next = (idx + delta + visible.length) % visible.length;
+      setActiveId(visible[next].id);
     }
 
     function onKeyDown(e) {
@@ -168,7 +214,7 @@ export default function App() {
       window.removeEventListener("blur", onBlur);
       clearInterval(keepAlive); // limpia el keep-alive al desmontar/recambiar
     };
-  }, [cameras, activeId, expandedId]);
+  }, [cameras, activeId, expandedId, hiddenIds]);
 
   async function handleDelete(cam) {
     if (!window.confirm(`¿Eliminar la cámara "${cam.name}"?`)) return;
@@ -184,6 +230,7 @@ export default function App() {
   function handleAdded(camera) {
     setCameras((list) => [...list, camera]);
     setShowAdd(false);
+    setShowDiscover(false);
   }
 
   function handleCredsSaved(camera) {
@@ -248,14 +295,63 @@ export default function App() {
               HLS · estable
             </button>
           </div>
+          <div className="cam-menu">
+            <button
+              className="btn btn-ghost"
+              onClick={() => setShowCamMenu((v) => !v)}
+              title="Mostrar/ocultar ventanas de cámara"
+            >
+              🪟 Ventanas
+              {hiddenIds.size > 0 && (
+                <span className="cam-menu-badge">{cameras.length - hiddenIds.size}/{cameras.length}</span>
+              )}
+              <span className="caret">▾</span>
+            </button>
+            {showCamMenu && (
+              <>
+                <div className="cam-menu-backdrop" onClick={() => setShowCamMenu(false)} />
+                <div className="cam-menu-pop">
+                  <div className="cam-menu-head">
+                    <span>Ventanas de cámara</span>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={showAllCameras}
+                      disabled={hiddenIds.size === 0}
+                    >
+                      Mostrar todas
+                    </button>
+                  </div>
+                  {cameras.length === 0 && (
+                    <p className="cam-menu-empty">No hay cámaras configuradas.</p>
+                  )}
+                  {cameras.map((cam) => {
+                    const visible = !hiddenIds.has(cam.id);
+                    return (
+                      <label key={cam.id} className="cam-menu-item">
+                        <input
+                          type="checkbox"
+                          checked={visible}
+                          onChange={() => toggleCamera(cam.id)}
+                        />
+                        <span className={visible ? "" : "cam-menu-off"}>{cam.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
           <button className="btn btn-ghost" onClick={() => setShowRecSettings(true)}>
             ⏺ Grabación
           </button>
           <button className="btn btn-ghost" onClick={() => setShowNetwork(true)}>
             ⚙ Red
           </button>
+          <button className="btn btn-ghost" onClick={() => setShowDiscover(true)}>
+            🔍 Descubrir cámaras
+          </button>
           <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
-            + Agregar cámara
+            + Agregar manual
           </button>
         </div>
       </header>
@@ -270,8 +366,15 @@ export default function App() {
         </p>
       )}
 
-      <div className="grid">
-        {cameras.map((cam) => (
+      {!loading && cameras.length > 0 &&
+        cameras.every((cam) => hiddenIds.has(cam.id)) && (
+          <p className="banner-info">
+            Todas las ventanas están cerradas. Ábrelas desde “🪟 Ventanas”.
+          </p>
+        )}
+
+      <div className={"grid grid-" + Math.min(3, Math.max(1, cameras.filter((cam) => !hiddenIds.has(cam.id)).length))}>
+        {cameras.filter((cam) => !hiddenIds.has(cam.id)).map((cam) => (
           <HlsPlayer
             key={cam.id + "-" + mode + "-" + (cam.quality || "low")}
             ref={(el) => {
@@ -282,6 +385,7 @@ export default function App() {
             url={cam.url}
             webrtcUrl={cam.webrtcUrl}
             name={cam.name}
+            source={cam.source}
             mode={mode}
             quality={cam.quality || "low"}
             switching={cam.switching}
@@ -307,12 +411,17 @@ export default function App() {
             onCredentials={() => setCredsFor(cam)}
             onWifi={() => setWifiFor(cam)}
             onExpand={() => setExpandedId(cam.id)}
+            onHide={() => hideCamera(cam.id)}
           />
         ))}
       </div>
 
       {showAdd && (
         <AddCameraModal onClose={() => setShowAdd(false)} onAdded={handleAdded} />
+      )}
+
+      {showDiscover && (
+        <DiscoverModal onClose={() => setShowDiscover(false)} onAdded={handleAdded} />
       )}
 
       {showNetwork && (

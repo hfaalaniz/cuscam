@@ -29,26 +29,49 @@ export default function HlsVideo({ url, name, onStatus, onReconnect, muted = tru
     let retryTimer = null;
     let retryDelay = 1000; // backoff: 1s, 2s, 4s… hasta MAX
     const MAX_DELAY = 10000;
+    // Reintentos fallidos seguidos sin volver a reproducir. Pasado el umbral
+    // dejamos de mostrar "reconectando" (spinner) y damos la cámara por caída
+    // ("error" -> overlay "Sin señal"/"Cámara desconectada"). Un corte breve de
+    // una V380 se recupera antes de llegar al umbral; una webcam USB
+    // desconectada nunca recupera y mostrará el mensaje a los ~pocos segundos.
+    let failStreak = 0;
+    const FAIL_THRESHOLD = 3; // 1s + 2s + 4s ≈ 7s antes de declarar "caída"
 
     setStatus("loading");
     onStatus?.("loading");
 
+    // Marca la cámara como "con imagen" en cuanto hay un frame listo. No basta
+    // con el evento "playing": en algunas cámaras (sub-stream con GOP largo)
+    // tarda en dispararse y el spinner se queda colgado pese a haber vídeo. Por
+    // eso reaccionamos también a "loadeddata"/"canplay" (más tempranos) y a que
+    // el <video> ya tenga datos (readyState >= HAVE_CURRENT_DATA).
     const onPlaying = () => {
       retryDelay = 1000; // el stream se recuperó: reseteamos el backoff
+      failStreak = 0; // y la racha de fallos
       setStatus("playing");
       onStatus?.("playing");
     };
     video.addEventListener("playing", onPlaying);
+    video.addEventListener("loadeddata", onPlaying);
+    video.addEventListener("canplay", onPlaying);
+    // Empuja el autoplay: si el navegador no arranca solo, el spinner nunca se
+    // quitaría. Lo intentamos al tener datos (ignorando el rechazo de autoplay).
+    const tryPlay = () => video.play?.().catch(() => {});
+    video.addEventListener("loadedmetadata", tryPlay);
 
     // Programa un reintento del stream tras un fallo fatal (con backoff).
-    // Mientras tanto seguimos en "loading" (spinner), no en "error", porque
-    // la cámara casi siempre vuelve en unos segundos.
+    // Mientras no superemos el umbral seguimos en "loading" (spinner), porque
+    // una V380 casi siempre vuelve en unos segundos. Pasado el umbral damos la
+    // cámara por caída ("error") pero SEGUIMOS reintentando en segundo plano,
+    // para que vuelva sola si la cámara se reconecta.
     const scheduleRetry = (reason) => {
       if (destroyed) return;
+      failStreak += 1;
+      const down = failStreak >= FAIL_THRESHOLD;
       console.warn(`HLS ${name}: ${reason} — reintentando en ${retryDelay}ms`);
       onReconnect?.(reason); // contabiliza la pérdida de señal (calidad de enlace)
-      setStatus("loading");
-      onStatus?.("loading");
+      setStatus(down ? "error" : "loading");
+      onStatus?.(down ? "error" : "loading");
       clearTimeout(retryTimer);
       retryTimer = setTimeout(() => {
         if (destroyed) return;
@@ -59,6 +82,13 @@ export default function HlsVideo({ url, name, onStatus, onReconnect, muted = tru
 
     const start = () => {
       if (destroyed) return;
+
+      // Si ya habíamos dado la cámara por caída, este reintento es una
+      // reconexión: mostramos "Conectando…" en vez de seguir en "error".
+      if (failStreak >= FAIL_THRESHOLD) {
+        setStatus("reconnecting");
+        onStatus?.("reconnecting");
+      }
 
       if (Hls.isSupported()) {
         // Si reintentamos, descartamos la instancia anterior antes de recrear.
@@ -114,6 +144,9 @@ export default function HlsVideo({ url, name, onStatus, onReconnect, muted = tru
       destroyed = true;
       clearTimeout(retryTimer);
       video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("loadeddata", onPlaying);
+      video.removeEventListener("canplay", onPlaying);
+      video.removeEventListener("loadedmetadata", tryPlay);
       video.onerror = null;
       if (hls) hls.destroy();
     };

@@ -19,12 +19,51 @@ export default function RecordingsModal({ camera, onClose }) {
   const [currentMs, setCurrentMs] = useState(null); // hora de pared actual
   const [selection, setSelection] = useState(null); // { from, to } a exportar
   const [exporting, setExporting] = useState(false);
+  const [days, setDays] = useState([]); // [{ day, segments, start, end }]
+  const [selectedDay, setSelectedDay] = useState(""); // "YYYY-MM-DD" o "" = todo
   const videoRef = useRef(null);
 
-  // Carga la línea de tiempo.
+  // Carga la lista de días con grabación (para el selector). Por defecto
+  // selecciona el más reciente para no cargar de golpe todo el historial.
   useEffect(() => {
     let aborted = false;
-    fetch(`/api/cameras/${camera.id}/timeline`)
+    fetch(`/api/cameras/${camera.id}/recording-days`)
+      .then((res) => res.json())
+      .then((json) => {
+        if (aborted) return;
+        const ds = json.days || [];
+        setDays(ds);
+        setSelectedDay(ds.length ? ds[0].day : "");
+      })
+      .catch(() => {});
+    return () => {
+      aborted = true;
+    };
+  }, [camera.id]);
+
+  // Convierte "YYYY-MM-DD" (hora local) al rango [from, to) en ms epoch del día.
+  function dayRange(day) {
+    if (!day) return null;
+    const [y, m, d] = day.split("-").map(Number);
+    const from = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+    const to = from + 24 * 60 * 60 * 1000;
+    return { from, to };
+  }
+
+  // Carga la línea de tiempo (filtrada por el día seleccionado, si hay uno).
+  useEffect(() => {
+    let aborted = false;
+    setLoading(true);
+    // Al cambiar de día reseteamos la reproducción.
+    setActiveIdx(null);
+    setCurrentMs(null);
+    setSelection(null);
+
+    let url = `/api/cameras/${camera.id}/timeline`;
+    const r = dayRange(selectedDay);
+    if (r) url += `?from=${r.from}&to=${r.to}`;
+
+    fetch(url)
       .then(async (res) => {
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Error al consultar");
@@ -33,14 +72,17 @@ export default function RecordingsModal({ camera, onClose }) {
       .then((json) => {
         if (aborted) return;
         setSegments(json.segments || []);
-        setRange({ start: json.rangeStart, end: json.rangeEnd });
+        // Si filtramos por día, acotamos la barra a ese día completo para que
+        // las horas del eje sean coherentes (00:00 → 24:00); si no, al rango real.
+        if (r) setRange({ start: r.from, end: r.to });
+        else setRange({ start: json.rangeStart, end: json.rangeEnd });
       })
       .catch((err) => !aborted && setError(err.message))
       .finally(() => !aborted && setLoading(false));
     return () => {
       aborted = true;
     };
-  }, [camera.id]);
+  }, [camera.id, selectedDay]);
 
   const srcOf = (idx) =>
     `/api/cameras/${camera.id}/recordings/${encodeURI(segments[idx].file)}`;
@@ -55,10 +97,15 @@ export default function RecordingsModal({ camera, onClose }) {
         const next = segments.findIndex((s) => s.start >= ms);
         if (next === -1) return;
         setActiveIdx(next);
+        setCurrentMs(segments[next].start);
         pendingSeek.current = 0;
         return;
       }
       const offsetSec = (ms - segments[idx].start) / 1000;
+      // Posiciona el cursor en el instante elegido de inmediato, sin esperar al
+      // primer "timeupdate" (si no, el cursor se quedaba en la posición previa
+      // —p. ej. el final del segmento anterior— hasta que el vídeo emitía).
+      setCurrentMs(ms);
       if (idx === activeIdx && videoRef.current) {
         videoRef.current.currentTime = offsetSec;
       } else {
@@ -137,15 +184,45 @@ export default function RecordingsModal({ camera, onClose }) {
 
   const hasData = segments.length > 0 && range.start != null;
 
+  // Etiqueta legible de un día ("YYYY-MM-DD" -> "lun 30 jun 2026").
+  const fmtDay = (day) => {
+    const [y, m, d] = day.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString([], {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
   return (
     <FloatingWindow title={`Grabaciones — ${camera.name}`} onClose={onClose} wide>
-      {loading && <p className="banner-info">Cargando línea de tiempo…</p>}
+        {/* Selector de día de grabación */}
+        {days.length > 0 && (
+          <div className="rec-day-bar">
+            <label className="rec-day-label">📅 Día:</label>
+            <select
+              className="rec-day-select"
+              value={selectedDay}
+              onChange={(e) => setSelectedDay(e.target.value)}
+            >
+              {days.map((d) => (
+                <option key={d.day} value={d.day}>
+                  {fmtDay(d.day)} · {d.segments} segmento{d.segments !== 1 ? "s" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {loading && <p className="banner-info">Cargando línea de tiempo…</p>}
         {error && <p className="modal-error">{error}</p>}
 
         {!loading && !error && !hasData && (
           <p className="modal-hint">
-            No hay grabaciones todavía para esta cámara. Los segmentos aparecerán
-            aquí en cuanto se cierre el primero.
+            {days.length === 0
+              ? "No hay grabaciones todavía para esta cámara. Los segmentos aparecerán aquí en cuanto se cierre el primero."
+              : "No hay grabaciones en el día seleccionado."}
           </p>
         )}
 

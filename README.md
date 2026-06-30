@@ -1,10 +1,11 @@
-# 🎥 cuscam — Centro de Monitoreo de Cámaras V380
+# 🎥 cuscam — Centro de Monitoreo de Cámaras
 
-Sistema de videovigilancia para cámaras **V380 Pro** con visualización en tiempo
-real desde el navegador (escritorio), una app Android, y acceso seguro desde
-internet. Convierte el RTSP de las cámaras a **WebRTC** (latencia <1s) y **HLS**
-(~1-2s) mediante MediaMTX, e incluye control **PTZ** (movimiento), cambio de
-resolución **HD/SD** y más.
+Sistema de videovigilancia para cámaras **IP RTSP/ONVIF** (V380, **Hikvision**,
+Dahua, genéricas…) y **webcams USB**, con visualización en tiempo real desde el
+navegador (escritorio), una app Android, y acceso seguro desde internet. Convierte
+el vídeo a **WebRTC** (latencia <1s) y **HLS** (~1-2s) mediante MediaMTX, e incluye
+**descubrimiento automático** de cámaras (escaneo de red local o remota), control
+**PTZ** (movimiento), cambio de resolución **HD/SD** y más.
 
 > Reescrito desde la idea original (React Native + WSL) a una arquitectura web
 > servida por un backend Node sobre Windows nativo. Ver historial de cambios.
@@ -114,6 +115,43 @@ Tanto WebRTC como HLS funcionan por Tailscale.
 
 ---
 
+## 🛰️ Cámaras en otra red / otra ubicación física
+
+El servidor (el que graba 24/7) puede integrar cámaras IP que están en **otra red
+física** (p. ej. cámaras Hikvision en otra casa/oficina), grabándolas de forma
+centralizada. La clave: el servidor debe **poder alcanzar esas cámaras por red**.
+
+### 1. Conectar las dos redes (Tailscale subnet router)
+En el sitio remoto pon un dispositivo pequeño **siempre encendido** (una Raspberry
+Pi, o un router compatible con Tailscale) que anuncie la red de las cámaras:
+```bash
+# En el dispositivo del sitio remoto (ajusta el rango real de esa red):
+tailscale up --advertise-routes=192.168.50.0/24
+```
+Aprueba esa ruta en el panel de Tailscale (https://login.tailscale.com → Machines →
+la máquina → *Edit route settings*). En el **servidor cuscam**:
+```bash
+tailscale up --accept-routes
+```
+Ahora el servidor ve las cámaras remotas (`192.168.50.x`) como si fueran locales.
+
+### 2. Descubrir y añadir las cámaras
+En la web, **🔍 Descubrir cámaras** → pestaña *Cámaras IP*:
+- En **«Subred a escanear»** escribe los 3 primeros octetos de la red remota
+  (p. ej. `192.168.50`) y pulsa **Escanear**.
+- Elige la cámara: el sistema sondea rutas y credenciales (incluye las de
+  **Hikvision** `/Streaming/Channels/101`, **Dahua**, V380, ONVIF…). Las
+  Hikvision piden usuario/contraseña (normalmente `admin` + la que configuraste).
+
+### 3. Ahorrar ancho de banda (sub-stream)
+Grabar cámaras remotas en alta 24/7 consume mucha subida (~40 GB/día por cámara a
+1080p). Usa el botón **HD/SD** de la tarjeta para grabar el **sub-stream (SD)**:
+cuscam reconoce el patrón de cada marca y cambia a la pista de baja resolución
+(Hikvision `…/102`, Dahua `subtype=1`, V380 `ch00_1`). El alta calidad puede
+quedar en la SD/NVR de la propia cámara como respaldo.
+
+---
+
 ## 📱 App Android
 
 Proyecto WebView listo para compilar en Android Studio. Solo configura la URL
@@ -147,7 +185,11 @@ powershell -ExecutionPolicy Bypass -File .\server\setup-firewall.ps1
 | Método | Ruta | Descripción |
 |---|---|---|
 | GET | `/api/cameras` | Lista de cámaras con URLs de video. |
-| POST | `/api/cameras` | Agregar cámara. |
+| POST | `/api/cameras` | Agregar cámara (IP RTSP o `source:"usb"`). |
+| GET | `/api/discover/network` | Escanea la red buscando cámaras (`?subnet=192.168.50` para otra red). |
+| POST | `/api/discover/probe` | Sondea una IP (rutas+credenciales RTSP) y valida el stream. |
+| GET | `/api/usb-cameras/scan` | Lista webcams USB (DirectShow) con sus formatos. |
+| GET | `/api/cameras/:id/recording-days` | Días con grabación (para el selector de fechas). |
 | PUT | `/api/cameras/:id` | Editar todas las propiedades. |
 | DELETE | `/api/cameras/:id` | Eliminar cámara. |
 | PATCH | `/api/cameras/:id/credentials` | Actualizar usuario/clave RTSP. |

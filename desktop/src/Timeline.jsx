@@ -48,20 +48,22 @@ export default function Timeline({
   const inSegment = (ms) => segments.some((s) => ms >= s.start && ms < s.end);
 
   // Carga el fotograma de previsualización con debounce mientras se mueve el
-  // ratón (evita una petición por cada píxel). Solo dentro de tramos grabados.
+  // ratón (evita una petición por cada píxel). Solo dentro de tramos grabados;
+  // si el backend no tiene frame para ese instante, el <img> se oculta solo
+  // (onError) — así no dependemos de que `inSegment` sea exacto al píxel.
+  const hoverBucket = hover ? Math.floor(hover.ms / 2000) * 2000 : null;
+  const hoverInSeg = hover ? inSegment(hover.ms) : false;
   useEffect(() => {
-    if (!hover || !cameraId || !inSegment(hover.ms)) {
+    if (!hover || !cameraId || !hoverInSeg) {
       setPreviewUrl(null);
       return;
     }
-    // Redondea a 2s para alinear con la caché del backend (menos peticiones).
-    const at = Math.floor(hover.ms / 2000) * 2000;
     const t = setTimeout(() => {
-      setPreviewUrl(`/api/cameras/${cameraId}/frame?at=${at}`);
-    }, 120);
+      setPreviewUrl(`/api/cameras/${cameraId}/frame?at=${hoverBucket}`);
+    }, 100);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hover && Math.floor(hover.ms / 2000), cameraId]);
+  }, [hoverBucket, hoverInSeg, cameraId]);
 
   function msFromClientX(clientX) {
     const rect = barRef.current.getBoundingClientRect();
@@ -152,7 +154,12 @@ export default function Timeline({
         <div className="tl-hover-overlay">
           {previewUrl && (
             <div className="tl-hover-thumb" style={{ left: hover.x + "px" }}>
-              <img src={previewUrl} alt="" draggable={false} />
+              <img
+                src={previewUrl}
+                alt=""
+                draggable={false}
+                onError={() => setPreviewUrl(null)}
+              />
             </div>
           )}
           <div className="tl-hover-label" style={{ left: hover.x + "px" }}>

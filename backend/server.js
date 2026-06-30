@@ -7,17 +7,47 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import onvif from "onvif";
 import { createProxyMiddleware } from "http-proxy-middleware";
+import { scanNetwork, onvifDiscover, scanPorts, probeRtsp, RTSP_CREDS } from "./discover.mjs";
 
 const { Cam } = onvif;
 
+const IS_WINDOWS = process.platform === "win32";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const CONFIG_PATH = path.join(ROOT, "config", "cameras.json");
 const DESKTOP_DIST = path.join(ROOT, "desktop", "dist");
 const GENERATOR = path.join(ROOT, "server", "generate-mediamtx-config.mjs");
 const GENERATED_YML = path.join(ROOT, "server", "mediamtx.yml");
-const MEDIAMTX_DIR = path.join(ROOT, "mediamtx_v1.19.1_windows_amd64");
-const MEDIAMTX_EXE = path.join(MEDIAMTX_DIR, "mediamtx.exe");
+
+/**
+ * Localiza la carpeta de MediaMTX de forma multiplataforma. Acepta:
+ *  · MEDIAMTX_DIR en el entorno (override manual),
+ *  · una carpeta `mediamtx/` en la raíz (recomendado en Linux),
+ *  · cualquier `mediamtx_*` (los zips oficiales: ..._windows_amd64, _linux_arm64…).
+ * Si no encuentra carpeta, asume `mediamtx` en el PATH del sistema.
+ */
+function findMediamtxDir() {
+  if (process.env.MEDIAMTX_DIR) return process.env.MEDIAMTX_DIR;
+  const direct = path.join(ROOT, "mediamtx");
+  if (fs.existsSync(path.join(direct, IS_WINDOWS ? "mediamtx.exe" : "mediamtx"))) {
+    return direct;
+  }
+  try {
+    const match = fs
+      .readdirSync(ROOT, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && /^mediamtx_/i.test(e.name))
+      .map((e) => path.join(ROOT, e.name))
+      .find((dir) => fs.existsSync(path.join(dir, IS_WINDOWS ? "mediamtx.exe" : "mediamtx")));
+    if (match) return match;
+  } catch {
+    /* ignorar */
+  }
+  return direct; // fallback (puede no existir; el binario se buscará en PATH)
+}
+
+const MEDIAMTX_DIR = findMediamtxDir();
+const MEDIAMTX_BIN = IS_WINDOWS ? "mediamtx.exe" : "mediamtx";
+const MEDIAMTX_EXE = path.join(MEDIAMTX_DIR, MEDIAMTX_BIN);
 const MEDIAMTX_YML = path.join(MEDIAMTX_DIR, "mediamtx.yml");
 const MEDIAMTX_LOG = path.join(MEDIAMTX_DIR, "mediamtx.log");
 const TOOLS_DIR = path.join(ROOT, "tools");
@@ -45,6 +75,85 @@ function findFfmpeg() {
     }
   }
   return "ffmpeg"; // confía en el PATH como último recurso
+}
+
+/** Localiza ffprobe.exe (junto a ffmpeg en tools/). Devuelve ruta o "ffprobe". */
+function findFfprobe() {
+  const stack = [TOOLS_DIR];
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) stack.push(full);
+      else if (/^ffprobe(\.exe)?$/i.test(e.name)) return full;
+    }
+  }
+  return "ffprobe";
+}
+
+/**
+ * Escanea las webcams USB/locales (dispositivos DirectShow de vídeo) que ve
+ * Windows, junto con las resoluciones y fps que soporta cada una. Usa FFmpeg
+ * (`-list_devices` y `-list_options`), que escribe esta info por stderr.
+ * Devuelve [{ device, formats:[{ size, minFps, maxFps }] }].
+ */
+function scanDshowDevices() {
+  const ffmpeg = findFfmpeg();
+  // 1. Listar dispositivos. FFmpeg sale con código !=0 (no hay input real),
+  //    pero igualmente imprime la lista por stderr; la parseamos.
+  const list = spawnSync(
+    ffmpeg,
+    ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+    { encoding: "utf-8" }
+  );
+  const out = `${list.stderr || ""}`;
+  const videoNames = [];
+  // Cada dispositivo de vídeo aparece como:  "Nombre" (video)
+  // (las líneas "Alternative name" y "(audio)" se ignoran).
+  for (const line of out.split(/\r?\n/)) {
+    const m = line.match(/"([^"]+)"\s*\(video\)/i);
+    if (m) videoNames.push(m[1]);
+  }
+
+  // 2. Para cada dispositivo, listar sus formatos (resolución + fps).
+  return videoNames.map((device) => ({ device, formats: dshowFormats(ffmpeg, device) }));
+}
+
+/** Lee los formatos (size + rango de fps) soportados por un dispositivo dshow. */
+function dshowFormats(ffmpeg, device) {
+  const r = spawnSync(
+    ffmpeg,
+    ["-hide_banner", "-list_options", "true", "-f", "dshow", "-i", `video=${device}`],
+    { encoding: "utf-8" }
+  );
+  const out = `${r.stderr || ""}`;
+  // Deduplicamos por "size", quedándonos con el rango de fps más amplio visto.
+  const bySize = new Map();
+  for (const line of out.split(/\r?\n/)) {
+    // ... min s=640x480 fps=5 max s=640x480 fps=30 ...
+    const m = line.match(/min s=(\d+x\d+) fps=([\d.]+) max s=(\d+x\d+) fps=([\d.]+)/i);
+    if (!m) continue;
+    const size = m[3]; // el "max" suele ser el tamaño efectivo de ese modo
+    const minFps = Math.round(parseFloat(m[2]));
+    const maxFps = Math.round(parseFloat(m[4]));
+    const prev = bySize.get(size);
+    if (!prev) bySize.set(size, { size, minFps, maxFps });
+    else {
+      prev.minFps = Math.min(prev.minFps, minFps);
+      prev.maxFps = Math.max(prev.maxFps, maxFps);
+    }
+  }
+  // Orden: mayor resolución primero (área de píxeles).
+  return [...bySize.values()].sort((a, b) => {
+    const area = (s) => s.size.split("x").reduce((x, y) => x * Number(y), 1);
+    return area(b) - area(a);
+  });
 }
 
 // Valores por defecto de grabación (si falta el bloque en la config).
@@ -83,9 +192,24 @@ function regenerateAndRestartMediaMtx() {
   } catch (err) {
     return { ok: false, error: "No se pudo copiar mediamtx.yml: " + err.message };
   }
-  // 3. Reiniciar MediaMTX (matar el proceso y relanzarlo).
+  // 3. Reiniciar MediaMTX.
+  // Si corre como servicio systemd (Linux), reiniciarlo por ahí es lo más
+  // limpio; sirve también cuando lo lanzó el propio backend.
+  if (!IS_WINDOWS && process.env.MEDIAMTX_SYSTEMD) {
+    const r = spawnSync("systemctl", ["restart", process.env.MEDIAMTX_SYSTEMD], {
+      encoding: "utf-8",
+    });
+    return r.status === 0
+      ? { ok: true }
+      : { ok: false, error: "No se pudo reiniciar el servicio MediaMTX: " + (r.stderr || "") };
+  }
+  // Modo manual (Windows o Linux sin systemd): matar el proceso y relanzarlo.
   try {
-    spawnSync("taskkill", ["/IM", "mediamtx.exe", "/F"], { encoding: "utf-8" });
+    if (IS_WINDOWS) {
+      spawnSync("taskkill", ["/IM", "mediamtx.exe", "/F"], { encoding: "utf-8" });
+    } else {
+      spawnSync("pkill", ["-f", "mediamtx"], { encoding: "utf-8" });
+    }
   } catch {
     /* puede no estar corriendo; no es fatal */
   }
@@ -124,16 +248,28 @@ function saveConfig(config) {
 
 /**
  * Devuelve la URL RTSP efectiva de una cámara según su calidad seleccionada.
- * En V380, ch00_0 = main-stream (alta) y ch00_1 = sub-stream (baja).
- * Por defecto se mantiene la ruta tal cual está en la config.
+ * Reconoce el patrón main/sub-stream de varias marcas:
+ *   · V380:      ch00_0 (alta) / ch00_1 (baja)
+ *   · Hikvision: /Streaming/Channels/101 (alta) / 102 (baja)
+ *   · Dahua:     subtype=0 (alta) / subtype=1 (baja)
+ * Elegir "low" (sub-stream) reduce mucho el ancho de banda — útil para
+ * cámaras remotas grabadas por túnel. Por defecto mantiene la ruta tal cual.
  */
 function effectiveRtsp(cam) {
+  // Las webcams USB no tienen RTSP propio (las publica FFmpeg); no aplica.
+  if (cam.source === "usb") return cam.rtsp || "";
   const quality = cam.quality || "low";
-  let rtsp = cam.rtsp;
+  let rtsp = cam.rtsp || "";
   if (quality === "high") {
-    rtsp = rtsp.replace(/ch00_1(\b|$)/, "ch00_0$1");
+    rtsp = rtsp
+      .replace(/ch00_1(\b|$)/, "ch00_0$1")
+      .replace(/(\/Streaming\/Channels\/)\d0?2\b/i, "$1101")
+      .replace(/subtype=1\b/i, "subtype=0");
   } else {
-    rtsp = rtsp.replace(/ch00_0(\b|$)/, "ch00_1$1");
+    rtsp = rtsp
+      .replace(/ch00_0(\b|$)/, "ch00_1$1")
+      .replace(/(\/Streaming\/Channels\/)\d0?1\b/i, "$1102")
+      .replace(/subtype=0\b/i, "subtype=1");
   }
   return rtsp;
 }
@@ -156,6 +292,11 @@ function buildCameras(config) {
     deviceId: cam.deviceId,
     model: cam.model,
     quality: cam.quality || "low",
+    // Tipo de fuente: "usb" (webcam DirectShow) o IP/RTSP (V380) por defecto.
+    source: cam.source === "usb" ? "usb" : "rtsp",
+    ...(cam.source === "usb"
+      ? { device: cam.device, size: cam.size || "640x480", fps: cam.fps || 15 }
+      : {}),
     // ¿Esta cámara está grabando? Global salvo override por cámara.
     recording: recordingConfig(config).enabled && cam.record !== false,
   }));
@@ -183,9 +324,113 @@ app.get("/api/cameras", (req, res) => {
   }
 });
 
+// API: escanear webcams USB/locales (dispositivos DirectShow) disponibles, con
+// sus resoluciones/fps soportados. Marca cuáles ya están añadidas (`inUse`).
+app.get("/api/usb-cameras/scan", (req, res) => {
+  try {
+    const devices = scanDshowDevices();
+    const config = loadConfig();
+    const used = new Set(
+      config.cameras.filter((c) => c.source === "usb").map((c) => c.device)
+    );
+    res.json({
+      devices: devices.map((d) => ({ ...d, inUse: used.has(d.device) })),
+    });
+  } catch (err) {
+    console.error("Error escaneando cámaras USB:", err);
+    res.status(500).json({ error: "No se pudieron escanear las cámaras USB" });
+  }
+});
+
+// --- Descubrimiento de cámaras IP en la red local ---
+
+// Escanea la LAN buscando hosts con puertos de cámara abiertos, y en paralelo
+// hace ONVIF WS-Discovery. Marca cuáles ya están en la config (por IP). Usa el
+// windowsHostIp de la config como pista para elegir la interfaz/subred correcta.
+app.get("/api/discover/network", async (req, res) => {
+  try {
+    const config = loadConfig();
+    const preferIp = config.windowsHostIp || null;
+    // ?subnet=192.168.50 escanea OTRA /24 (red remota alcanzable por VPN/túnel,
+    // p.ej. cámaras Hikvision en otro sitio vía Tailscale subnet-router).
+    const subnetBase = /^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(req.query.subnet || "")
+      ? req.query.subnet
+      : null;
+    // El ONVIF multicast solo funciona en la LAN local; en subred remota se
+    // confía en el escaneo de puertos (las Hikvision exponen 554/80).
+    const [scan, onvif] = await Promise.all([
+      scanNetwork({ preferIp, subnetBase }),
+      subnetBase ? Promise.resolve([]) : onvifDiscover({ timeout: 4000, preferIp }),
+    ]);
+
+    // IPs ya configuradas (extraídas de las URLs RTSP existentes).
+    const usedIps = new Set(
+      config.cameras
+        .filter((c) => c.source !== "usb" && c.rtsp)
+        .map((c) => parseRtsp(c.rtsp).ip)
+        .filter(Boolean)
+    );
+    const onvifIps = new Set(onvif.map((o) => o.ip));
+
+    const hosts = (scan.hosts || [])
+      // El propio host y el router no son cámaras.
+      .filter((h) => h.ip !== preferIp)
+      .map((h) => ({
+        ip: h.ip,
+        openPorts: h.openPorts,
+        onvif: onvifIps.has(h.ip),
+        onvifXaddr: (onvif.find((o) => o.ip === h.ip) || {}).xaddrs || "",
+        // Heurística: si tiene 554 (RTSP) u ONVIF, es muy probable que sea cámara.
+        likelyCamera: h.openPorts.includes(554) || onvifIps.has(h.ip),
+        inUse: usedIps.has(h.ip),
+      }));
+
+    res.json({ subnet: scan.subnet, hosts });
+  } catch (err) {
+    console.error("Error en descubrimiento de red:", err);
+    res.status(500).json({ error: "No se pudo escanear la red" });
+  }
+});
+
+// Sondea exhaustivamente una IP: prueba puertos, y luego fuerza bruta de rutas
+// RTSP × credenciales conocidas validando con ffprobe que haya vídeo real.
+// Devuelve la URL RTSP que funcione (o el motivo del fallo).
+// Body opcional: { user, password } para probar primero esas credenciales.
+app.post("/api/discover/probe", async (req, res) => {
+  try {
+    const ip = String((req.body || {}).ip || "").trim();
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+      return res.status(400).json({ error: "IP inválida" });
+    }
+    const ffprobe = findFfprobe();
+
+    // Si el usuario aporta credenciales, las probamos primero (además de las
+    // por defecto), para no depender solo del diccionario.
+    const { user, password } = req.body || {};
+    const baseCreds = [];
+    if (user != null || password != null) {
+      baseCreds.push([String(user || ""), String(password || "")]);
+    }
+
+    const ports = await scanPorts(ip, [554, 8554, 10554], 700);
+    const result = await probeRtsp(ffprobe, ip, {
+      ports: ports.length ? ports : [554, 8554, 10554],
+      creds: baseCreds.length
+        ? [...baseCreds, ...RTSP_CREDS]
+        : RTSP_CREDS,
+      timeout: 5000,
+    });
+    res.json({ ip, ...result });
+  } catch (err) {
+    console.error("Error sondeando RTSP:", err);
+    res.status(500).json({ error: "No se pudo sondear la cámara" });
+  }
+});
+
 // API: añadir una cámara nueva.
-// Body: { name, ip, port?, path?, user?, password?, deviceId?, model? }
-// o bien { name, rtsp } para pasar la URL completa.
+// Cámara IP: { name, ip, port?, path?, user?, password?, deviceId?, model? }
+//            o { name, rtsp } para pasar la URL completa.
+// Cámara USB: { name, source:"usb", device, size?, fps?, model? }
 app.post("/api/cameras", (req, res) => {
   try {
     const body = req.body || {};
@@ -194,26 +439,44 @@ app.post("/api/cameras", (req, res) => {
       return res.status(400).json({ error: "El nombre es obligatorio" });
     }
 
-    // Construye la URL RTSP a partir de campos o usa la provista directamente.
-    let rtsp = (body.rtsp || "").trim();
-    if (!rtsp) {
-      const ip = (body.ip || "").trim();
-      if (!ip) {
-        return res.status(400).json({ error: "Falta la IP o la URL RTSP" });
+    const isUsb = body.source === "usb";
+    let rtsp = "";
+
+    if (isUsb) {
+      if (!String(body.device || "").trim()) {
+        return res.status(400).json({ error: "Falta el dispositivo USB (device)" });
       }
-      const port = body.port || 554;
-      const streamPath = (body.path || "/live/ch00_1").replace(/^\/?/, "/");
-      const creds =
-        body.user && body.password
-          ? `${encodeURIComponent(body.user)}:${encodeURIComponent(body.password)}@`
-          : "";
-      rtsp = `rtsp://${creds}${ip}:${port}${streamPath}`;
+    } else {
+      // Construye la URL RTSP a partir de campos o usa la provista directamente.
+      rtsp = (body.rtsp || "").trim();
+      if (!rtsp) {
+        const ip = (body.ip || "").trim();
+        if (!ip) {
+          return res.status(400).json({ error: "Falta la IP o la URL RTSP" });
+        }
+        const port = body.port || 554;
+        const streamPath = (body.path || "/live/ch00_1").replace(/^\/?/, "/");
+        const creds =
+          body.user && body.password
+            ? `${encodeURIComponent(body.user)}:${encodeURIComponent(body.password)}@`
+            : "";
+        rtsp = `rtsp://${creds}${ip}:${port}${streamPath}`;
+      }
     }
 
     const config = loadConfig();
 
-    // id: usa deviceId si viene, si no, slug del nombre. Garantiza unicidad.
-    let id = body.deviceId ? `cam${slugify(body.deviceId)}` : slugify(name);
+    // No permitir añadir dos veces el mismo dispositivo USB.
+    if (isUsb && config.cameras.some((c) => c.source === "usb" && c.device === body.device)) {
+      return res.status(409).json({ error: "Esa cámara USB ya está añadida" });
+    }
+
+    // id: deviceId (IP) o slug del dispositivo/nombre (USB). Garantiza unicidad.
+    let id = isUsb
+      ? `cam-usb-${slugify(body.device)}`
+      : body.deviceId
+        ? `cam${slugify(body.deviceId)}`
+        : slugify(name);
     if (!id) id = "cam";
     const existingIds = new Set(config.cameras.map((c) => c.id));
     let uniqueId = id;
@@ -222,14 +485,44 @@ app.post("/api/cameras", (req, res) => {
       uniqueId = `${id}-${n++}`;
     }
 
-    const camera = { id: uniqueId, name, rtsp };
-    if (body.deviceId) camera.deviceId = String(body.deviceId);
-    if (body.model) camera.model = String(body.model);
+    let camera;
+    if (isUsb) {
+      camera = {
+        id: uniqueId,
+        name,
+        source: "usb",
+        device: String(body.device),
+        size: /^\d+x\d+$/.test(body.size) ? body.size : "640x480",
+        fps: Math.max(1, Math.min(60, Math.floor(Number(body.fps) || 15))),
+        quality: "low",
+      };
+      if (body.model) camera.model = String(body.model);
+    } else {
+      camera = { id: uniqueId, name, rtsp };
+      if (body.deviceId) camera.deviceId = String(body.deviceId);
+      if (body.model) camera.model = String(body.model);
+    }
 
     config.cameras.push(camera);
     saveConfig(config);
 
-    res.status(201).json({ camera: buildCameras(config).find((c) => c.id === uniqueId) });
+    // Una cámara USB necesita que MediaMTX regenere su yml y arranque el
+    // FFmpeg (runOnInit) que la captura. Lo hacemos en caliente.
+    let restarted = false;
+    if (isUsb) {
+      const result = regenerateAndRestartMediaMtx();
+      if (!result.ok) {
+        return res
+          .status(500)
+          .json({ error: result.error, camera: buildCameras(config).find((c) => c.id === uniqueId) });
+      }
+      restarted = true;
+    }
+
+    res.status(201).json({
+      camera: buildCameras(config).find((c) => c.id === uniqueId),
+      restarted,
+    });
   } catch (err) {
     console.error("Error añadiendo cámara:", err);
     res.status(500).json({ error: "No se pudo añadir la cámara" });
@@ -368,6 +661,20 @@ app.get("/api/cameras/:id/full", (req, res) => {
     const cam = config.cameras.find((c) => c.id === req.params.id);
     if (!cam) return res.status(404).json({ error: "Cámara no encontrada" });
 
+    if (cam.source === "usb") {
+      return res.json({
+        camera: {
+          id: cam.id,
+          name: cam.name || "",
+          model: cam.model || "",
+          source: "usb",
+          device: cam.device || "",
+          size: cam.size || "640x480",
+          fps: cam.fps || 15,
+        },
+      });
+    }
+
     const parts = parseRtsp(cam.rtsp);
     res.json({
       camera: {
@@ -406,22 +713,43 @@ app.put("/api/cameras/:id", (req, res) => {
     }
     if (body.deviceId != null) cam.deviceId = String(body.deviceId);
     if (body.model != null) cam.model = String(body.model);
-    if (body.onvifPort != null) {
-      cam.onvifPort = Number(body.onvifPort) || 8899;
-      ptzCams.delete(cam.id); // invalida la conexión ONVIF cacheada
-    }
 
-    // Reconstruye la URL RTSP a partir de los campos desglosados.
-    if (body.ip != null || body.port != null || body.path != null ||
-        body.user != null || body.password != null) {
-      const current = parseRtsp(cam.rtsp);
-      cam.rtsp = buildRtsp({
-        ip: body.ip != null ? String(body.ip).trim() : current.ip,
-        port: body.port != null ? body.port : current.port,
-        path: body.path != null ? String(body.path) : current.path,
-        user: body.user != null ? body.user : current.user,
-        password: body.password != null ? body.password : current.password,
-      });
+    // --- Cámara USB: solo aplican device/size/fps; cambiarlos exige regenerar. ---
+    let usbChanged = false;
+    if (cam.source === "usb") {
+      if (body.device != null && String(body.device).trim() && body.device !== cam.device) {
+        cam.device = String(body.device).trim();
+        usbChanged = true;
+      }
+      if (body.size != null && /^\d+x\d+$/.test(body.size) && body.size !== cam.size) {
+        cam.size = body.size;
+        usbChanged = true;
+      }
+      if (body.fps != null) {
+        const fps = Math.max(1, Math.min(60, Math.floor(Number(body.fps))));
+        if (Number.isFinite(fps) && fps !== cam.fps) {
+          cam.fps = fps;
+          usbChanged = true;
+        }
+      }
+    } else {
+      if (body.onvifPort != null) {
+        cam.onvifPort = Number(body.onvifPort) || 8899;
+        ptzCams.delete(cam.id); // invalida la conexión ONVIF cacheada
+      }
+
+      // Reconstruye la URL RTSP a partir de los campos desglosados.
+      if (body.ip != null || body.port != null || body.path != null ||
+          body.user != null || body.password != null) {
+        const current = parseRtsp(cam.rtsp);
+        cam.rtsp = buildRtsp({
+          ip: body.ip != null ? String(body.ip).trim() : current.ip,
+          port: body.port != null ? body.port : current.port,
+          path: body.path != null ? String(body.path) : current.path,
+          user: body.user != null ? body.user : current.user,
+          password: body.password != null ? body.password : current.password,
+        });
+      }
     }
 
     if (body.wifi && typeof body.wifi === "object") {
@@ -440,8 +768,12 @@ app.put("/api/cameras/:id", (req, res) => {
     }
 
     saveConfig(config);
-    if (recordChanged) regenerateAndRestartMediaMtx();
-    res.json({ camera: buildCameras(config).find((c) => c.id === cam.id) });
+    let restarted = false;
+    if (recordChanged || usbChanged) {
+      regenerateAndRestartMediaMtx();
+      restarted = true;
+    }
+    res.json({ camera: buildCameras(config).find((c) => c.id === cam.id), restarted });
   } catch (err) {
     console.error("Error editando cámara:", err);
     res.status(500).json({ error: "No se pudo editar la cámara" });
@@ -617,6 +949,11 @@ app.post("/api/cameras/:id/quality", async (req, res) => {
     const config = loadConfig();
     const cam = config.cameras.find((c) => c.id === req.params.id);
     if (!cam) return res.status(404).json({ error: "Cámara no encontrada" });
+    if (cam.source === "usb") {
+      return res
+        .status(400)
+        .json({ error: "El cambio de calidad no aplica a cámaras USB" });
+    }
 
     cam.quality = quality;
     saveConfig(config);
@@ -759,7 +1096,23 @@ function parseSegmentStart(name) {
  * inicio de este); para el último segmento se usa su mtime. Sin dependencias
  * externas (no requiere ffprobe).
  */
-function segmentsWithTimes(camDir) {
+/** Convierte una duración de MediaMTX ("15m","1h","30s") a milisegundos. */
+function parseDurationMs(str) {
+  const m = String(str || "").match(/^(\d+)\s*([smh])$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return m[2] === "h" ? n * 3600000 : m[2] === "m" ? n * 60000 : n * 1000;
+}
+
+/**
+ * Lista los segmentos con su rango temporal real.
+ * `maxSegmentMs`: duración máxima de un segmento (la configurada, p.ej. 15m).
+ * Es CLAVE para no inflar la duración cuando hay HUECOS entre grabaciones:
+ * antes el `end` se ponía al inicio del siguiente segmento aunque estuviera
+ * horas después, pintando un segmento de 15min como si durara 9h y descuadrando
+ * el cursor/preview. Ahora acotamos el fin a inicio+maxSegmentMs (con margen).
+ */
+function segmentsWithTimes(camDir, maxSegmentMs = null) {
   const segs = listVideoFiles(camDir)
     .map((f) => ({
       file: path.relative(camDir, f.full).replace(/\\/g, "/"),
@@ -771,15 +1124,35 @@ function segmentsWithTimes(camDir) {
     .filter((s) => s.start != null)
     .sort((a, b) => a.start - b.start); // cronológico ascendente
 
+  // Tope de duración por segmento: la configurada +20% de margen; si no se
+  // conoce, 1h como salvaguarda razonable.
+  const cap = maxSegmentMs != null ? Math.round(maxSegmentMs * 1.2) : 3600000;
+
   for (let i = 0; i < segs.length; i++) {
     const next = segs[i + 1];
-    // Fin = inicio del siguiente si son consecutivos; si no, el mtime del archivo.
-    const byNext = next ? next.start : null;
-    const end = byNext != null && byNext > segs[i].start ? byNext : segs[i].mtime;
+    // Candidatos a "fin": inicio del siguiente (si es contiguo) y el mtime.
+    const byNext = next && next.start > segs[i].start ? next.start : null;
+    const byMtime = segs[i].mtime > segs[i].start ? segs[i].mtime : null;
+    // Preferimos el siguiente segmento, pero acotado: si está demasiado lejos
+    // (hubo un hueco), usamos el mtime o el tope de duración configurado.
+    let end;
+    if (byNext != null) {
+      end = Math.min(byNext, segs[i].start + cap);
+      // Si el mtime cae entre medias y es más fiable que el tope, úsalo.
+      if (byMtime != null && byMtime < end && byMtime > segs[i].start) end = byMtime;
+    } else {
+      end = byMtime != null ? Math.min(byMtime, segs[i].start + cap) : segs[i].start + cap;
+    }
     segs[i].end = end;
     segs[i].duration = Math.max(0, end - segs[i].start);
   }
   return segs;
+}
+
+/** segmentsWithTimes para una cámara, tomando el maxSegmentMs de la config. */
+function segmentsForCamera(config, camDir) {
+  const maxMs = parseDurationMs(recordingConfig(config).segmentDuration);
+  return segmentsWithTimes(camDir, maxMs);
 }
 
 // Configuración global de grabación.
@@ -841,11 +1214,42 @@ app.get("/api/cameras/:id/recordings", (req, res) => {
 
     const camDir = path.join(recordingsDir(config), cam.id);
     // Más recientes primero para la lista; el timeline reordena por su cuenta.
-    const recordings = segmentsWithTimes(camDir).sort((a, b) => b.start - a.start);
+    const recordings = segmentsForCamera(config, camDir).sort((a, b) => b.start - a.start);
     res.json({ recordings });
   } catch (err) {
     console.error("Error listando grabaciones:", err);
     res.status(500).json({ error: "No se pudieron listar las grabaciones" });
+  }
+});
+
+// Días con grabación de una cámara (para el selector de fechas del visor).
+// Devuelve [{ day:"YYYY-MM-DD", segments, start, end }] ordenado descendente
+// (más recientes primero). El día se calcula en hora LOCAL del servidor.
+app.get("/api/cameras/:id/recording-days", (req, res) => {
+  try {
+    const config = loadConfig();
+    const cam = config.cameras.find((c) => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: "Cámara no encontrada" });
+
+    const camDir = path.join(recordingsDir(config), cam.id);
+    const byDay = new Map();
+    for (const s of segmentsForCamera(config, camDir)) {
+      const d = new Date(s.start);
+      // Clave YYYY-MM-DD en hora local (el nombre del archivo ya es hora local).
+      const key =
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-` +
+        `${String(d.getDate()).padStart(2, "0")}`;
+      const cur = byDay.get(key) || { day: key, segments: 0, start: s.start, end: s.end };
+      cur.segments += 1;
+      cur.start = Math.min(cur.start, s.start);
+      cur.end = Math.max(cur.end, s.end);
+      byDay.set(key, cur);
+    }
+    const days = [...byDay.values()].sort((a, b) => (a.day < b.day ? 1 : -1));
+    res.json({ days });
+  } catch (err) {
+    console.error("Error listando días de grabación:", err);
+    res.status(500).json({ error: "No se pudieron listar los días" });
   }
 });
 
@@ -858,7 +1262,7 @@ app.get("/api/cameras/:id/timeline", (req, res) => {
     if (!cam) return res.status(404).json({ error: "Cámara no encontrada" });
 
     const camDir = path.join(recordingsDir(config), cam.id);
-    let segs = segmentsWithTimes(camDir); // ascendente
+    let segs = segmentsForCamera(config, camDir); // ascendente
 
     const from = req.query.from != null ? Number(req.query.from) : null;
     const to = req.query.to != null ? Number(req.query.to) : null;
@@ -969,7 +1373,7 @@ app.get("/api/cameras/:id/frame", (req, res) => {
     }
 
     const camDir = path.join(recordingsDir(config), cam.id);
-    const seg = segmentsWithTimes(camDir).find((s) => at >= s.start && at < s.end);
+    const seg = segmentsForCamera(config, camDir).find((s) => at >= s.start && at < s.end);
     if (!seg) return res.status(404).json({ error: "Sin grabación en ese instante" });
 
     // Instante redondeado para la caché (reutiliza hovers cercanos).
@@ -1054,7 +1458,7 @@ app.get("/api/cameras/:id/export", (req, res) => {
     const ffmpeg = findFfmpeg();
     const camDir = path.join(recordingsDir(config), cam.id);
     // Segmentos que solapan el rango, en orden cronológico.
-    const segs = segmentsWithTimes(camDir).filter((s) => s.end > from && s.start < to);
+    const segs = segmentsForCamera(config, camDir).filter((s) => s.end > from && s.start < to);
     if (segs.length === 0) {
       return res.status(404).json({ error: "No hay grabaciones en ese rango" });
     }

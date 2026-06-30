@@ -21,6 +21,7 @@ const HlsPlayer = forwardRef(function HlsPlayer(
     url, // URL HLS
     webrtcUrl, // URL WebRTC/WHEP
     name,
+    source = "rtsp", // "usb" (webcam DirectShow) | "rtsp" (IP/V380)
     mode = "hls", // "webrtc" | "hls"
     quality = "low", // "high" (720p) | "low" (360p)
     switching = false, // true mientras se cambia la calidad
@@ -38,6 +39,7 @@ const HlsPlayer = forwardRef(function HlsPlayer(
     onCredentials,
     onWifi,
     onExpand,
+    onHide, // cerrar la ventana (ocultar, sin eliminar la cámara)
   },
   ref
 ) {
@@ -222,6 +224,15 @@ const HlsPlayer = forwardRef(function HlsPlayer(
           )}
           {onDelete && (
             <button className="card-action card-delete" title="Eliminar cámara" onClick={onDelete}>
+              🗑
+            </button>
+          )}
+          {onHide && (
+            <button
+              className="card-action card-close"
+              title="Cerrar ventana (reábrela desde “Ventanas”)"
+              onClick={onHide}
+            >
               ✕
             </button>
           )}
@@ -258,7 +269,27 @@ const HlsPlayer = forwardRef(function HlsPlayer(
           )}
         </div>
         {status === "loading" && !switching && <div className="overlay spinner" />}
-        {status === "error" && !switching && <div className="overlay error">Sin señal</div>}
+        {status === "reconnecting" && !switching && (
+          <div className="overlay switching">
+            <div className="spinner-inline" />
+            Conectando…
+          </div>
+        )}
+        {status === "error" && !switching && (
+          <div className="overlay error">
+            {source === "usb" ? (
+              <>
+                <span className="overlay-icon">🔌</span>
+                Cámara desconectada
+              </>
+            ) : (
+              <>
+                <span className="overlay-icon">📡</span>
+                Sin señal
+              </>
+            )}
+          </div>
+        )}
         {switching && (
           <div className="overlay switching">
             <div className="spinner-inline" />
