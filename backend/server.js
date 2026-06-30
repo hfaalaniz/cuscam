@@ -98,15 +98,19 @@ function findFfprobe() {
 }
 
 /**
- * Escanea las webcams USB/locales (dispositivos DirectShow de vídeo) que ve
- * Windows, junto con las resoluciones y fps que soporta cada una. Usa FFmpeg
- * (`-list_devices` y `-list_options`), que escribe esta info por stderr.
- * Devuelve [{ device, formats:[{ size, minFps, maxFps }] }].
+ * Escanea las webcams USB/locales conectadas y sus formatos. Multiplataforma:
+ *  · Windows: dispositivos DirectShow (FFmpeg -list_devices/-list_options).
+ *  · Linux:   Video4Linux2 (/dev/v4l/by-id para nombre estable + v4l2-ctl).
+ * Devuelve [{ device, label, formats:[{ size, minFps, maxFps }] }].
+ * `device` es lo que se guarda en la config (nombre en Windows, path en Linux);
+ * `label` es el nombre legible para mostrar.
  */
 function scanDshowDevices() {
+  return IS_WINDOWS ? scanDshowWindows() : scanV4l2Linux();
+}
+
+function scanDshowWindows() {
   const ffmpeg = findFfmpeg();
-  // 1. Listar dispositivos. FFmpeg sale con código !=0 (no hay input real),
-  //    pero igualmente imprime la lista por stderr; la parseamos.
   const list = spawnSync(
     ffmpeg,
     ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
@@ -114,15 +118,66 @@ function scanDshowDevices() {
   );
   const out = `${list.stderr || ""}`;
   const videoNames = [];
-  // Cada dispositivo de vídeo aparece como:  "Nombre" (video)
-  // (las líneas "Alternative name" y "(audio)" se ignoran).
   for (const line of out.split(/\r?\n/)) {
     const m = line.match(/"([^"]+)"\s*\(video\)/i);
     if (m) videoNames.push(m[1]);
   }
+  return videoNames.map((device) => ({
+    device,
+    label: device,
+    formats: dshowFormats(ffmpeg, device),
+  }));
+}
 
-  // 2. Para cada dispositivo, listar sus formatos (resolución + fps).
-  return videoNames.map((device) => ({ device, formats: dshowFormats(ffmpeg, device) }));
+/**
+ * Escanea cámaras V4L2 en Linux. Usa /dev/v4l/by-id/ (paths estables, uno por
+ * cámara) y v4l2-ctl para listar resoluciones. Solo el "index0" de cada cámara
+ * es el de captura (index1 suele ser metadata).
+ */
+function scanV4l2Linux() {
+  const BY_ID = "/dev/v4l/by-id";
+  let entries;
+  try {
+    entries = fs.readdirSync(BY_ID);
+  } catch {
+    return []; // sin cámaras o sin udev
+  }
+  const cams = [];
+  for (const name of entries) {
+    // Tomamos solo el nodo de captura principal (index0) de cada cámara.
+    if (!/video-index0$/.test(name)) continue;
+    const devPath = path.join(BY_ID, name);
+    // Nombre legible: usb-FABRICANTE_MODELO-video-index0 -> "FABRICANTE MODELO"
+    const label = name
+      .replace(/^usb-/, "")
+      .replace(/-video-index0$/, "")
+      .replace(/_/g, " ")
+      .trim();
+    const formats = v4l2Formats(devPath);
+    if (formats.length) cams.push({ device: devPath, label, formats });
+  }
+  return cams;
+}
+
+/** Lee resoluciones soportadas de un dispositivo V4L2 con v4l2-ctl. */
+function v4l2Formats(devPath) {
+  const r = spawnSync(
+    "v4l2-ctl",
+    ["-d", devPath, "--list-formats-ext"],
+    { encoding: "utf-8" }
+  );
+  const out = `${r.stdout || ""}`;
+  const bySize = new Map();
+  for (const line of out.split(/\r?\n/)) {
+    // "Size: Discrete 640x480"
+    const m = line.match(/Size:\s*Discrete\s+(\d+x\d+)/i);
+    if (m) bySize.set(m[1], { size: m[1], minFps: 5, maxFps: 30 });
+  }
+  // Orden: mayor resolución primero.
+  return [...bySize.values()].sort((a, b) => {
+    const area = (s) => s.size.split("x").reduce((x, y) => x * Number(y), 1);
+    return area(b) - area(a);
+  });
 }
 
 /** Lee los formatos (size + rango de fps) soportados por un dispositivo dshow. */
@@ -471,9 +526,10 @@ app.post("/api/cameras", (req, res) => {
       return res.status(409).json({ error: "Esa cámara USB ya está añadida" });
     }
 
-    // id: deviceId (IP) o slug del dispositivo/nombre (USB). Garantiza unicidad.
+    // id: para USB usamos el slug del NOMBRE (en Linux el device es un path
+    // largo /dev/v4l/by-id/... que no sirve de id). Para IP, el deviceId o slug.
     let id = isUsb
-      ? `cam-usb-${slugify(body.device)}`
+      ? `cam-usb-${slugify(name) || "device"}`
       : body.deviceId
         ? `cam${slugify(body.deviceId)}`
         : slugify(name);

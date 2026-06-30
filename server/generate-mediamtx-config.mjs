@@ -146,12 +146,21 @@ function usbYaml(cam) {
   //  · -fflags +genpts: regenera PTS si faltan.
   //  · -vsync cfr -r <fps>: salida a tasa constante (duplica/descarta frames)
   //    -> H.264 estable para HLS y grabación.
+  // La ENTRADA de FFmpeg depende del SO:
+  //  · Windows: DirectShow, dispositivo por nombre  -> -f dshow -i video="..."
+  //  · Linux:   Video4Linux2, dispositivo por path   -> -f v4l2 -i /dev/videoN
+  // En `device` guardamos el nombre (Windows) o el path /dev/video* o
+  // /dev/v4l/by-id/... (Linux). Detectamos por la forma del valor.
+  const isLinuxDev = /^\/dev\//.test(device);
+  const input = isLinuxDev
+    ? `-f v4l2 -input_format yuyv422 -video_size ${size} -i "${device}"`
+    : `-f dshow -rtbufsize 100M -use_wallclock_as_timestamps 1 ` +
+      `-video_size ${size} -i video="${device}"`;
+
   // preset veryfast (no ultrafast): bastante mejor calidad/eficiencia a 720p
   // sin dejar de ir en tiempo real. maxrate+bufsize estabilizan el bitrate.
   const ffmpeg =
-    `${FFMPEG} -f dshow -rtbufsize 100M -use_wallclock_as_timestamps 1 ` +
-    `-video_size ${size} ` +
-    `-i video="${device}" ` +
+    `${FFMPEG} ${input} ` +
     `-fflags +genpts -vsync cfr -r ${fps} ` +
     `-c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p ` +
     `-g ${fps * 2} -b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k ` +

@@ -305,7 +305,7 @@ function UsbDiscovery({ onClose, onAdded }) {
     if (dev.inUse) return;
     setSelected(dev);
     setError(null);
-    setName(dev.device);
+    setName(dev.label || dev.device);
     const best = dev.formats?.[0];
     setSize(best ? best.size : "640x480");
     setFps(best ? Math.min(best.maxFps || 15, 15) : 15);
@@ -331,7 +331,7 @@ function UsbDiscovery({ onClose, onAdded }) {
           device: selected.device,
           size,
           fps: Number(fps),
-          model: selected.device,
+          model: selected.label || selected.device,
         }),
       });
       const data = await res.json();
@@ -372,7 +372,7 @@ function UsbDiscovery({ onClose, onAdded }) {
               disabled={dev.inUse}
               onClick={() => choose(dev)}
             >
-              <span className="usb-device-name">📷 {dev.device}</span>
+              <span className="usb-device-name">📷 {dev.label || dev.device}</span>
               <span className="usb-device-meta">
                 {dev.inUse
                   ? "ya añadida"
