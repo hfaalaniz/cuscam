@@ -3,6 +3,7 @@ import cors from "cors";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import onvif from "onvif";
@@ -287,6 +288,120 @@ const PORT = process.env.PORT || 3000;
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// =====================================================================
+//  Autenticación (login propio, sin dependencias externas)
+// =====================================================================
+// Se ACTIVA solo si se define CUSCAM_USER + CUSCAM_PASSWORD (o _HASH) en el
+// entorno. Si no, el servidor funciona sin login (como antes), útil en LAN.
+//
+// Sesión: cookie firmada con HMAC-SHA256 (clave CUSCAM_SECRET). No guarda
+// estado en el servidor; el token lleva { user, exp } y su firma.
+const AUTH_USER = process.env.CUSCAM_USER || "";
+// La contraseña se compara por hash. Acepta CUSCAM_PASSWORD (texto, se hashea
+// al vuelo) o CUSCAM_PASSWORD_HASH (sha256 hex, no expone la clave en el env).
+const AUTH_PASS_HASH =
+  process.env.CUSCAM_PASSWORD_HASH ||
+  (process.env.CUSCAM_PASSWORD
+    ? crypto.createHash("sha256").update(process.env.CUSCAM_PASSWORD).digest("hex")
+    : "");
+const AUTH_ENABLED = !!(AUTH_USER && AUTH_PASS_HASH);
+// Secreto para firmar las cookies. Si no se define, se genera uno aleatorio al
+// arrancar (las sesiones se invalidan en cada reinicio; define CUSCAM_SECRET
+// para que persistan).
+const AUTH_SECRET = process.env.CUSCAM_SECRET || crypto.randomBytes(32).toString("hex");
+const SESSION_HOURS = Number(process.env.CUSCAM_SESSION_HOURS || 720); // 30 días
+const COOKIE = "cuscam_session";
+
+function sign(value) {
+  return crypto.createHmac("sha256", AUTH_SECRET).update(value).digest("base64url");
+}
+/** Crea un token de sesión firmado: base64url(payload).firma */
+function makeToken(user) {
+  const exp = Date.now() + SESSION_HOURS * 3600 * 1000;
+  const payload = Buffer.from(JSON.stringify({ user, exp })).toString("base64url");
+  return `${payload}.${sign(payload)}`;
+}
+/** Verifica el token; devuelve el payload o null. */
+function verifyToken(token) {
+  if (!token || !token.includes(".")) return null;
+  const [payload, sig] = token.split(".");
+  // Comparación en tiempo constante para evitar timing attacks.
+  const expected = sign(payload);
+  if (
+    sig.length !== expected.length ||
+    !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
+  ) {
+    return null;
+  }
+  try {
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString());
+    if (!data.exp || data.exp < Date.now()) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+/** Lee la cookie de sesión de la request. */
+function getSession(req) {
+  const raw = req.headers.cookie || "";
+  const m = raw.match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
+  return m ? verifyToken(decodeURIComponent(m[1])) : null;
+}
+
+// Endpoints de login/logout (siempre disponibles; no requieren sesión).
+app.get("/api/auth/status", (req, res) => {
+  res.json({ authEnabled: AUTH_ENABLED, loggedIn: !AUTH_ENABLED || !!getSession(req) });
+});
+app.post("/api/auth/login", (req, res) => {
+  if (!AUTH_ENABLED) return res.json({ ok: true }); // login deshabilitado
+  const { user, password } = req.body || {};
+  const passHash = crypto
+    .createHash("sha256")
+    .update(String(password || ""))
+    .digest("hex");
+  const userOk = String(user || "") === AUTH_USER;
+  // timingSafeEqual sobre los hashes (longitud fija) evita filtrar info.
+  const passOk =
+    passHash.length === AUTH_PASS_HASH.length &&
+    crypto.timingSafeEqual(Buffer.from(passHash), Buffer.from(AUTH_PASS_HASH));
+  if (!userOk || !passOk) {
+    return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
+  }
+  const token = makeToken(AUTH_USER);
+  const secure = (req.headers["x-forwarded-proto"] || "").includes("https");
+  res.setHeader(
+    "Set-Cookie",
+    `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; ` +
+      `Max-Age=${SESSION_HOURS * 3600}${secure ? "; Secure" : ""}`
+  );
+  res.json({ ok: true });
+});
+app.post("/api/auth/logout", (req, res) => {
+  res.setHeader("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; Max-Age=0`);
+  res.json({ ok: true });
+});
+
+// Middleware: si la auth está activa, exige sesión para TODO lo demás (web,
+// API y vídeo). Deja pasar solo los endpoints de auth y la página de login.
+if (AUTH_ENABLED) {
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api/auth/")) return next();
+    if (getSession(req)) return next();
+    // Petición de API/vídeo sin sesión -> 401 (el frontend redirige a login).
+    if (req.path.startsWith("/api/") || req.path.startsWith("/hls/") || req.path.startsWith("/whep/")) {
+      return res.status(401).json({ error: "No autenticado" });
+    }
+    // Petición de página -> sirve la SPA, que mostrará el formulario de login.
+    if (fs.existsSync(DESKTOP_DIST)) {
+      return res.sendFile(path.join(DESKTOP_DIST, "index.html"));
+    }
+    res.status(401).send("No autenticado");
+  });
+  console.log(`🔒 Autenticación ACTIVADA (usuario: ${AUTH_USER})`);
+} else {
+  console.log("🔓 Autenticación desactivada (define CUSCAM_USER y CUSCAM_PASSWORD para activarla)");
+}
 
 /**
  * Lee la configuración en cada request para que los cambios en

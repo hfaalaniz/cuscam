@@ -815,6 +815,43 @@ body {
   margin-top: 8px;
 }
 
+/* ===== Login ===== */
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.login-card {
+  width: 100%;
+  max-width: 340px;
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 14px;
+  padding: 28px 24px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.login-title {
+  margin: 0;
+  font-size: 20px;
+  text-align: center;
+}
+.login-sub {
+  margin: 0 0 6px;
+  text-align: center;
+  color: #999;
+  font-size: 13px;
+}
+.login-btn {
+  margin-top: 6px;
+  width: 100%;
+  justify-content: center;
+}
+
 /* ===== Grabación ===== */
 
 /* Selector de día en el visor de grabaciones */

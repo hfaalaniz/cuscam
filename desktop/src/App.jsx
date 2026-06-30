@@ -14,6 +14,7 @@ import SignalHistoryModal from "./SignalHistoryModal.jsx";
 
 export default function App() {
   const [cameras, setCameras] = useState([]);
+  const [authEnabled, setAuthEnabled] = useState(false); // ¿mostrar botón Salir?
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -104,6 +105,14 @@ export default function App() {
   }
 
   useEffect(loadCameras, []);
+
+  // ¿La autenticación está activa? (para mostrar el botón "Salir").
+  useEffect(() => {
+    fetch("/api/auth/status")
+      .then((r) => r.json())
+      .then((d) => setAuthEnabled(!!d.authEnabled))
+      .catch(() => {});
+  }, []);
 
   // Mantiene una ventana activa válida y VISIBLE: si no hay, o la activa fue
   // ocultada/eliminada, pasa el foco a la primera cámara visible.
@@ -353,6 +362,18 @@ export default function App() {
           <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
             + Agregar manual
           </button>
+          {authEnabled && (
+            <button
+              className="btn btn-ghost"
+              title="Cerrar sesión"
+              onClick={async () => {
+                await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+                window.location.reload();
+              }}
+            >
+              ⎋ Salir
+            </button>
+          )}
         </div>
       </header>
 
