@@ -506,18 +506,17 @@ app.post("/api/cameras", (req, res) => {
     config.cameras.push(camera);
     saveConfig(config);
 
-    // Una cámara USB necesita que MediaMTX regenere su yml y arranque el
-    // FFmpeg (runOnInit) que la captura. Lo hacemos en caliente.
+    // Toda cámara nueva (IP o USB) requiere regenerar el mediamtx.yml y recargar
+    // MediaMTX para que empiece a tomar el stream; si no, la ventana queda "sin
+    // señal" hasta el próximo reinicio. Lo hacemos en caliente al añadir.
     let restarted = false;
-    if (isUsb) {
-      const result = regenerateAndRestartMediaMtx();
-      if (!result.ok) {
-        return res
-          .status(500)
-          .json({ error: result.error, camera: buildCameras(config).find((c) => c.id === uniqueId) });
-      }
-      restarted = true;
+    const result = regenerateAndRestartMediaMtx();
+    if (!result.ok) {
+      return res
+        .status(500)
+        .json({ error: result.error, camera: buildCameras(config).find((c) => c.id === uniqueId) });
     }
+    restarted = true;
 
     res.status(201).json({
       camera: buildCameras(config).find((c) => c.id === uniqueId),
@@ -1034,7 +1033,10 @@ app.delete("/api/cameras/:id", (req, res) => {
       return res.status(404).json({ error: "Cámara no encontrada" });
     }
     saveConfig(config);
-    res.json({ ok: true });
+    // Regenera el yml y recarga MediaMTX para que deje de tomar la cámara
+    // eliminada (si no, su path seguiría activo hasta el próximo reinicio).
+    regenerateAndRestartMediaMtx();
+    res.json({ ok: true, restarted: true });
   } catch (err) {
     console.error("Error eliminando cámara:", err);
     res.status(500).json({ error: "No se pudo eliminar la cámara" });
