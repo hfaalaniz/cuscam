@@ -437,6 +437,16 @@ app.post("/api/auth/logout", (req, res) => {
 if (AUTH_ENABLED) {
   app.use((req, res, next) => {
     if (req.path.startsWith("/api/auth/")) return next();
+    // Los assets estáticos de la SPA (JS/CSS/iconos) se sirven SIN sesión: son
+    // el propio código del frontend (incluida la pantalla de login), no datos
+    // sensibles. Sin esto, el navegador no puede ni pintar el login porque su
+    // JS también quedaría bloqueado (y llegaría como text/html -> error MIME).
+    if (
+      req.path.startsWith("/assets/") ||
+      /\.(js|css|map|ico|png|jpg|jpeg|svg|woff2?|ttf)$/i.test(req.path)
+    ) {
+      return next();
+    }
     if (getSession(req)) return next();
     // Petición de API/vídeo sin sesión -> 401 (el frontend redirige a login).
     if (req.path.startsWith("/api/") || req.path.startsWith("/hls/") || req.path.startsWith("/whep/")) {
