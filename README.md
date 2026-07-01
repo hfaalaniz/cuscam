@@ -178,6 +178,28 @@ powershell -ExecutionPolicy Bypass -File .\server\setup-firewall.ps1
 - `config/cameras.json` y `server/mediamtx.yml` contienen credenciales y están
   **excluidos del repositorio** (`.gitignore`). No los subas.
 
+### Login propio (opcional)
+
+El backend puede exigir usuario y contraseña para toda la web, la API y el vídeo.
+Se activa **solo** si defines las variables de entorno; si no, funciona sin login
+(útil en LAN de confianza). La sesión es una cookie firmada (HMAC-SHA256), sin
+estado en el servidor.
+
+| Variable | Descripción |
+|----------|-------------|
+| `CUSCAM_USER` | Usuario. Activa el login junto con la contraseña. |
+| `CUSCAM_PASSWORD` | Contraseña en texto (se hashea al vuelo). |
+| `CUSCAM_PASSWORD_HASH` | Alternativa: sha256 hex, para no dejar la clave en el env. |
+| `CUSCAM_SECRET` | Clave para firmar cookies. Si no se define, se genera una aleatoria en cada arranque (las sesiones se invalidan al reiniciar). |
+| `CUSCAM_SESSION_HOURS` | Duración de la sesión (por defecto 720 = 30 días). |
+| `CUSCAM_LOGIN_MAX_ATTEMPTS` | Intentos fallidos por IP antes de bloquear (por defecto 8). |
+| `CUSCAM_LOGIN_LOCKOUT_MS` | Duración del bloqueo por fuerza bruta en ms (por defecto 900000 = 15 min). |
+
+Tras `CUSCAM_LOGIN_MAX_ATTEMPTS` fallos seguidos, esa IP recibe **429** durante el
+tiempo de bloqueo (protección contra fuerza bruta). Un login correcto reinicia el
+contador. Si la sesión caduca mientras usas la app, el frontend detecta el 401 y
+vuelve automáticamente a la pantalla de login.
+
 ---
 
 ## 🧩 Referencia rápida de la API (backend `:3100`)

@@ -349,12 +349,60 @@ function getSession(req) {
   return m ? verifyToken(decodeURIComponent(m[1])) : null;
 }
 
+// Rate-limiting de intentos de login por IP (en memoria, sin dependencias).
+// Tras MAX_ATTEMPTS fallos seguidos se bloquea la IP durante LOCKOUT_MS. Un
+// login correcto limpia el contador. Evita fuerza bruta sobre la contraseña.
+const LOGIN_MAX_ATTEMPTS = Number(process.env.CUSCAM_LOGIN_MAX_ATTEMPTS || 8);
+const LOGIN_LOCKOUT_MS = Number(process.env.CUSCAM_LOGIN_LOCKOUT_MS || 15 * 60 * 1000);
+const loginAttempts = new Map(); // ip -> { count, first, until }
+
+/** Devuelve la IP del cliente (respeta X-Forwarded-For si hay proxy). */
+function clientIp(req) {
+  const fwd = (req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return fwd || req.socket?.remoteAddress || "unknown";
+}
+/** ¿La IP está bloqueada ahora mismo? Devuelve segundos restantes o 0. */
+function loginLockRemaining(ip) {
+  const rec = loginAttempts.get(ip);
+  if (rec?.until && rec.until > Date.now()) {
+    return Math.ceil((rec.until - Date.now()) / 1000);
+  }
+  return 0;
+}
+function recordLoginFail(ip) {
+  const now = Date.now();
+  const rec = loginAttempts.get(ip) || { count: 0, first: now, until: 0 };
+  rec.count += 1;
+  if (rec.count >= LOGIN_MAX_ATTEMPTS) rec.until = now + LOGIN_LOCKOUT_MS;
+  loginAttempts.set(ip, rec);
+}
+function clearLoginFails(ip) {
+  loginAttempts.delete(ip);
+}
+// Limpieza periódica de entradas caducadas para no crecer sin límite.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, rec] of loginAttempts) {
+    if ((!rec.until || rec.until < now) && (rec.count === 0 || now - rec.first > LOGIN_LOCKOUT_MS)) {
+      loginAttempts.delete(ip);
+    }
+  }
+}, LOGIN_LOCKOUT_MS).unref();
+
 // Endpoints de login/logout (siempre disponibles; no requieren sesión).
 app.get("/api/auth/status", (req, res) => {
   res.json({ authEnabled: AUTH_ENABLED, loggedIn: !AUTH_ENABLED || !!getSession(req) });
 });
 app.post("/api/auth/login", (req, res) => {
   if (!AUTH_ENABLED) return res.json({ ok: true }); // login deshabilitado
+  const ip = clientIp(req);
+  const locked = loginLockRemaining(ip);
+  if (locked) {
+    res.setHeader("Retry-After", String(locked));
+    return res.status(429).json({
+      error: `Demasiados intentos. Reintenta en ${Math.ceil(locked / 60)} min.`,
+    });
+  }
   const { user, password } = req.body || {};
   const passHash = crypto
     .createHash("sha256")
@@ -366,8 +414,10 @@ app.post("/api/auth/login", (req, res) => {
     passHash.length === AUTH_PASS_HASH.length &&
     crypto.timingSafeEqual(Buffer.from(passHash), Buffer.from(AUTH_PASS_HASH));
   if (!userOk || !passOk) {
+    recordLoginFail(ip);
     return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
   }
+  clearLoginFails(ip);
   const token = makeToken(AUTH_USER);
   const secure = (req.headers["x-forwarded-proto"] || "").includes("https");
   res.setHeader(
